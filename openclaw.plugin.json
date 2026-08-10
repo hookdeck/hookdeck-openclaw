@@ -515,7 +515,7 @@
           "allowRetryCancel": {
             "type": "boolean",
             "default": false,
-            "description": "Permit 'Retry-After: -1' to cancel Hookdeck's automatic retries on permanently-invalid input. Off by default: with it off, wire behaviour matches the sibling Hermes and n8n plugins exactly."
+            "description": "Permit 'Retry-After: -1' to cancel Hookdeck's automatic retries on permanently-invalid input. Off by default: with it off, wire behaviour matches Hookdeck's other agent-platform plugins exactly."
           }
         }
       },

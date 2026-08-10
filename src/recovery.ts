@@ -99,9 +99,16 @@ export async function reconcileOrphans(
 
     const result = await client.retryEvent(row.eventId);
     if (result.ok) {
-      // Settled only once Hookdeck has accepted the redelivery. The other order
-      // loses the event entirely if the process dies between the two: a
+      // Settled only once Hookdeck has accepted the redelivery: settling first
+      // loses the event entirely if the process dies between the two — a
       // terminal row, no orphan, no Issue and no dead-letter record.
+      //
+      // `dispatch/agent.ts` deliberately uses the OPPOSITE order, and the
+      // asymmetry is the point. There, a live ingress can be handed the
+      // redelivery within milliseconds, so settling afterwards would stamp the
+      // NEXT run's row. Here we are still booting: nothing is being admitted
+      // yet, so the redelivery cannot race us, and the crash window is the
+      // hazard worth closing.
       await ledger.settle(row.eventId, "failed");
       summary.retried += 1;
       logger.debug(`re-queued interrupted event ${row.eventId}`);
@@ -118,8 +125,25 @@ export async function reconcileOrphans(
       lastAttempt: false,
       attemptCount: row.attempt,
     });
+
+    // A 404 means the event has aged out of Hookdeck's retention: no future
+    // boot will do better, so the row is settled. Anything else may be
+    // transient — a network fault, a rate limit — and is left `running` for the
+    // next boot to retry.
+    //
+    // Leaving a permanently dead row running would make it an orphan forever:
+    // one duplicate dead-letter per boot, and since orphans are recovered
+    // oldest-first it would consume the budget ahead of events that could
+    // actually be recovered.
+    if (result.code === "not_found") {
+      await ledger.settle(row.eventId, "failed");
+    }
+
     logger.warn(
-      `could not re-queue interrupted event ${row.eventId}: ${result.message}`,
+      `could not re-queue interrupted event ${row.eventId}: ${result.message}` +
+        (result.code === "not_found"
+          ? " (aged out of retention; not retried again)"
+          : " (will be retried on the next start)"),
     );
   }
 

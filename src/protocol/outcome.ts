@@ -162,7 +162,7 @@ export interface RenderRetryAfterOptions {
   /**
    * Kill switch. When false, cancellations degrade to "no Retry-After header",
    * which leaves Hookdeck's normal retry rules in force. Default behaviour is
-   * then byte-identical to the sibling Hermes and n8n plugins.
+   * then byte-identical to Hookdeck's other agent-platform plugins.
    */
   allowRetryCancel: boolean;
 }

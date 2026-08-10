@@ -35,15 +35,31 @@ export async function doctorHandler(deps: ToolDeps) {
         : reportedPersistence(stats.persistence),
   });
 
-  const orphans = deps.ledger.listOrphans().length;
-  checks.push({
-    name: "interrupted work",
-    ok: orphans === 0,
-    detail:
-      orphans === 0
-        ? "none"
-        : `${orphans} row(s) left running by a previous process`,
-  });
+  // A disk view reads as instance "reader", so every row the running Gateway
+  // owns looks like an orphan to it. Reporting those as interrupted work would
+  // be alarming and wrong — they are jobs in progress.
+  if (deps.source === "live") {
+    const orphans = deps.ledger.listOrphans().length;
+    checks.push({
+      name: "interrupted work",
+      ok: orphans === 0,
+      detail:
+        orphans === 0
+          ? "none"
+          : `${orphans} row(s) left running by a previous process`,
+    });
+  } else {
+    const running = deps.ledger.stats().running;
+    checks.push({
+      name: "interrupted work",
+      ok: true,
+      detail:
+        running === 0
+          ? "none in progress"
+          : `${running} row(s) in progress; whether any were interrupted can only be told from ` +
+            `the Gateway process, which owns them`,
+    });
+  }
 
   checks.push({
     name: "api key",

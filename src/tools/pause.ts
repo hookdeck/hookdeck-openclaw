@@ -27,6 +27,19 @@ export function cancelPendingAutoResume(routeId: string): void {
   autoResumeCancels.delete(routeId);
 }
 
+/**
+ * Cancels every pending auto-resume.
+ *
+ * Called when the service stops. A timer scheduled up to an hour ahead
+ * captures the deps it was created with, so after a restart it would write
+ * through the previous run's stores — which can compact over the rows the new
+ * ones are using.
+ */
+export function cancelAllAutoResumes(): void {
+  for (const cancel of autoResumeCancels.values()) cancel();
+  autoResumeCancels.clear();
+}
+
 export async function pauseHandler(
   deps: ToolDeps,
   params: {
@@ -57,10 +70,16 @@ export async function pauseHandler(
   }
 
   if (params.paused) {
-    await deps.cursors.patch(params.routeId, { pausedByUs: true });
+    await deps.cursors.patch(params.routeId, {
+      pausedByUs: true,
+      pauseReason: "operator",
+    });
     const result = await client.pauseConnection(cursor.connectionId);
     if (!result.ok) {
-      await deps.cursors.patch(params.routeId, { pausedByUs: false });
+      await deps.cursors.patch(params.routeId, {
+        pausedByUs: false,
+        pauseReason: "shutdown",
+      });
       return { ok: false, note: result.message };
     }
 
@@ -91,7 +110,10 @@ export async function pauseHandler(
   cancelPendingAutoResume(params.routeId);
   const result = await client.unpauseConnection(cursor.connectionId);
   if (!result.ok) return { ok: false, note: result.message };
-  await deps.cursors.patch(params.routeId, { pausedByUs: false });
+  await deps.cursors.patch(params.routeId, {
+    pausedByUs: false,
+    pauseReason: "shutdown",
+  });
   return {
     ok: true,
     paused: false,

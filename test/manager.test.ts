@@ -492,3 +492,182 @@ describe("the catch-up window marks the START of an outage", () => {
     expect(cursors.get("stripe")?.lastDisconnectAt).toBeUndefined();
   });
 });
+
+describe("shutdown is bounded and scoped", () => {
+  it("stops pausing once the budget is spent", async () => {
+    // Pausing is a network call per route. Against an unreachable API the
+    // per-call timeout alone would multiply by the route count while the
+    // Gateway waits to exit.
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    let clock = 0;
+    const client = fakeClient({
+      pauseConnection: vi.fn(async () => {
+        clock += 4_000; // each call eats most of the budget
+        return { ok: true as const, data: { id: "web_1" } };
+      }),
+    });
+
+    const cfg = config({
+      pause: { onShutdown: true, shutdownTimeoutMs: 5_000 },
+      routes: {
+        a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } },
+        b: { source: "b", dispatch: { mode: "wake", sessionKey: "m" } },
+        c: { source: "c", dispatch: { mode: "wake", sessionKey: "m" } },
+      },
+    });
+    for (const id of ["a", "b", "c"]) {
+      await cursors.patch(id, { connectionId: `web_${id}` });
+    }
+
+    const mgr = createTransportManager({
+      config: cfg,
+      cursors,
+      logger: silent,
+      client,
+      spawn: () => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }),
+      resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+      readVersion: async () => "hookdeck version 2.4.0",
+      now: () => clock,
+    });
+
+    await mgr.start();
+    await mgr.stop();
+
+    expect(client.pauseConnection).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not pause a route that is no longer configured", async () => {
+    // Nothing would ever unpause it: the resume runs when a listener attaches,
+    // and a removed route has no listener.
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    await cursors.patch("stripe", { connectionId: "web_1" });
+    await cursors.patch("removed", { connectionId: "web_old" });
+
+    const client = fakeClient();
+    const mgr = createTransportManager({
+      config: config({ pause: { onShutdown: true, shutdownTimeoutMs: 5_000 } }),
+      cursors,
+      logger: silent,
+      client,
+      spawn: () => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }),
+      resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+      readVersion: async () => "hookdeck version 2.4.0",
+    });
+
+    await mgr.start();
+    await mgr.stop();
+
+    expect(client.pauseConnection).toHaveBeenCalledTimes(1);
+    expect(client.pauseConnection).toHaveBeenCalledWith("web_1");
+  });
+});
+
+describe("recovery runs when a listener attaches", () => {
+  // Under CLI transport this is the ONLY recovery path: an event delivered
+  // with no session attached is discarded, so unpausing or replaying before
+  // the tunnel is up sends the recovered traffic into nothing.
+  async function withListener() {
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    const lineCbs: ((line: string) => void)[] = [];
+    const client = fakeClient();
+    const mgr = createTransportManager({
+      config: config({ transport: { mode: "cli" } }),
+      cursors,
+      logger: silent,
+      client,
+      // Exits when killed, as a real child does: `stop()` waits for it.
+      spawn: () => {
+        const exitCbs: ((
+          code: number | null,
+          signal: string | null,
+        ) => void)[] = [];
+        return {
+          kill: () => exitCbs.forEach((cb) => cb(0, "SIGTERM")),
+          onLine: (cb: (line: string) => void) => lineCbs.push(cb),
+          onExit: (cb: (code: number | null, signal: string | null) => void) =>
+            exitCbs.push(cb),
+        };
+      },
+      resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+      readVersion: async () => "hookdeck version 2.4.0",
+      now: () => 1_000_000,
+    });
+    return {
+      mgr,
+      cursors,
+      client,
+      connect: () => lineCbs.forEach((cb) => cb("Ready! Forwarding")),
+    };
+  }
+
+  it("does not replay before the tunnel is up", async () => {
+    const { mgr, cursors, client } = await withListener();
+    await cursors.patch("stripe", {
+      connectionId: "web_1",
+      lastDisconnectAt: 1,
+    });
+
+    await mgr.start();
+    expect(client.bulkReplayRequests).not.toHaveBeenCalled();
+    await mgr.stop();
+  });
+
+  it("replays once it is", async () => {
+    const { mgr, cursors, client, connect } = await withListener();
+    await cursors.patch("stripe", {
+      connectionId: "web_1",
+      lastDisconnectAt: 1,
+    });
+
+    await mgr.start();
+    connect();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(client.bulkReplayRequests).toHaveBeenCalledOnce();
+    expect(cursors.get("stripe")?.lastDisconnectAt).toBeUndefined();
+    await mgr.stop();
+  });
+
+  it("lifts a shutdown pause on connect", async () => {
+    const { mgr, cursors, client, connect } = await withListener();
+    await cursors.patch("stripe", {
+      connectionId: "web_1",
+      pausedByUs: true,
+      pauseReason: "shutdown",
+    });
+
+    await mgr.start();
+    connect();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(client.unpauseConnection).toHaveBeenCalledWith("web_1");
+    await mgr.stop();
+  });
+
+  it("leaves a deliberate pause alone", async () => {
+    // An operator paused this for a diagnosed outage. A tunnel reconnecting is
+    // not a reason to resume a pipeline someone stopped on purpose.
+    const { mgr, cursors, client, connect } = await withListener();
+    await cursors.patch("stripe", {
+      connectionId: "web_1",
+      pausedByUs: true,
+      pauseReason: "operator",
+    });
+
+    await mgr.start();
+    connect();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(client.unpauseConnection).not.toHaveBeenCalled();
+    await mgr.stop();
+  });
+});

@@ -76,6 +76,37 @@ export interface HandledDelivery {
   verified?: boolean;
 }
 
+/**
+ * Providers that post form-encoded bodies are common enough to support
+ * directly — Twilio and Slack among them — and a permanent rejection would put
+ * them out of reach of a plugin whose premise is "any provider Hookdeck
+ * verifies".
+ *
+ * Parsed into a flat object, which is what a template or a filter path wants.
+ * Repeated keys become an array rather than silently losing all but one.
+ */
+function parseFormUrlEncoded(body: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of new URLSearchParams(body)) {
+    const existing = out[key];
+    if (existing === undefined) out[key] = value;
+    else if (Array.isArray(existing)) existing.push(value);
+    else out[key] = [existing, value];
+  }
+  return out;
+}
+
+function contentTypeIsFormEncoded(
+  headers: Record<string, string | string[] | undefined>,
+): boolean {
+  const raw = headers["content-type"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return (
+    typeof value === "string" &&
+    value.toLowerCase().includes("application/x-www-form-urlencoded")
+  );
+}
+
 function contentTypeIsJson(
   headers: Record<string, string | string[] | undefined>,
 ): boolean {
@@ -157,12 +188,14 @@ async function runPipeline(
   }
   const { routeId, route } = matched;
 
-  // 3. Content type.
-  if (!contentTypeIsJson(req.headers)) {
+  // 3. Content type. JSON or form-encoded; anything else is permanently wrong
+  //    for this ingress.
+  const formEncoded = contentTypeIsFormEncoded(req.headers);
+  if (!contentTypeIsJson(req.headers) && !formEncoded) {
     return cancel(
       "bad_content_type",
       415,
-      "expected application/json",
+      "expected application/json or application/x-www-form-urlencoded",
       routeId,
     );
   }
@@ -362,16 +395,23 @@ async function runPipeline(
     }
 
     let payload: unknown;
-    try {
-      payload = JSON.parse(decoded);
-    } catch (err) {
-      return cancel(
-        "malformed_json",
-        400,
-        err instanceof Error ? err.message : "invalid JSON",
-        routeId,
-        delivery,
-      );
+    if (formEncoded) {
+      // Cannot fail: any byte sequence is a valid query string. A body that is
+      // not really form-encoded parses to something odd rather than throwing,
+      // and a route filter is the right place to catch that.
+      payload = parseFormUrlEncoded(decoded);
+    } else {
+      try {
+        payload = JSON.parse(decoded);
+      } catch (err) {
+        return cancel(
+          "malformed_json",
+          400,
+          err instanceof Error ? err.message : "invalid JSON",
+          routeId,
+          delivery,
+        );
+      }
     }
 
     // 12. Route filters. A non-match is a deliberate drop, and a 2xx correctly

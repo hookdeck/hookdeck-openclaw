@@ -132,3 +132,49 @@ describe("hookdeck client — retryEvent", () => {
     );
   });
 });
+
+describe("rate limiting is distinguishable from a broken event", () => {
+  it("reports 429 with its own code and the Retry-After", async () => {
+    // A caller looping over events would otherwise report a generic failure
+    // per event, which reads as "those events are broken" rather than "slow
+    // down".
+    const client = createHookdeckClient({
+      apiKey: "k",
+      fetch: async () =>
+        new Response(JSON.stringify({ message: "too many requests" }), {
+          status: 429,
+          headers: { "retry-after": "30", "content-type": "application/json" },
+        }),
+    });
+
+    const result = await client.retryEvent("evt_1");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("rate_limited");
+      expect(result.retryAfterSeconds).toBe(30);
+      expect(result.message).toContain("30s");
+    }
+  });
+
+  it("still reports a rate limit without a Retry-After header", async () => {
+    const client = createHookdeckClient({
+      apiKey: "k",
+      fetch: async () => new Response("{}", { status: 429 }),
+    });
+    const result = await client.retryEvent("evt_1");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("rate_limited");
+      expect(result.retryAfterSeconds).toBeUndefined();
+    }
+  });
+
+  it("keeps 404 distinct, since that means retention not throttling", async () => {
+    const client = createHookdeckClient({
+      apiKey: "k",
+      fetch: async () => new Response("{}", { status: 404 }),
+    });
+    const result = await client.getIssue("iss_1");
+    expect(result.ok === false && result.code).toBe("not_found");
+  });
+});

@@ -25,6 +25,16 @@ export interface CursorRecord {
   routeId: string;
   lastDisconnectAt?: number;
   pausedByUs?: boolean;
+  /**
+   * Why it was paused.
+   *
+   * `shutdown` is a breadcrumb to undo on the next start. `operator` is a
+   * deliberate hold for a diagnosed outage, and must survive a reconnect —
+   * lifting it because a tunnel came back would resume a pipeline someone
+   * stopped on purpose. Absent on rows written before this existed, which are
+   * treated as `shutdown` to preserve the original behaviour.
+   */
+  pauseReason?: "shutdown" | "operator";
   provisioningFingerprint?: string;
   connectionId?: string;
   updatedAt: number;

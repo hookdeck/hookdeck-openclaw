@@ -1105,3 +1105,85 @@ describe("an unsigned attempt count cannot poison an event", () => {
     expect(dispatch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("form-encoded providers", () => {
+  // Twilio and Slack post application/x-www-form-urlencoded. Rejecting it
+  // permanently would put them out of reach of a plugin whose premise is "any
+  // provider Hookdeck verifies".
+  function formRequest(body: string, eventId = "evt_form"): IncomingDelivery {
+    const bytes = Buffer.from(body, "utf8");
+    const headers: Record<string, string> = {
+      "content-type": "application/x-www-form-urlencoded",
+      "x-hookdeck-signature": computeHookdeckSignature(bytes, SECRET),
+      "x-hookdeck-eventid": eventId,
+      "x-hookdeck-attempt-count": "1",
+    };
+    return {
+      method: "POST",
+      url: "/hookdeck/stripe",
+      headers,
+      stream: Object.assign(Readable.from([bytes]), { headers }),
+    };
+  }
+
+  it("accepts and parses a form body", async () => {
+    const { deps, dispatch } = harness();
+    const result = await handleDelivery(
+      deps,
+      formRequest("MessageStatus=delivered&MessageSid=SM123"),
+    );
+
+    expect(result.plan.status).toBe(200);
+    expect(dispatch.mock.calls[0]?.[0].payload).toEqual({
+      MessageStatus: "delivered",
+      MessageSid: "SM123",
+    });
+  });
+
+  it("keeps repeated keys rather than losing all but one", async () => {
+    const { deps, dispatch } = harness();
+    await handleDelivery(deps, formRequest("tag=a&tag=b"));
+    expect(dispatch.mock.calls[0]?.[0].payload).toEqual({ tag: ["a", "b"] });
+  });
+
+  it("verifies the signature over the raw form bytes", async () => {
+    const { deps, dispatch } = harness();
+    const bad = formRequest("a=1");
+    bad.headers["x-hookdeck-signature"] = "wrong";
+    const result = await handleDelivery(deps, bad);
+
+    expect(result.plan.status).toBe(401);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a content type that is neither", async () => {
+    const { deps } = harness();
+    const result = await handleDelivery(
+      deps,
+      request({ contentType: "text/xml" }),
+    );
+    expect(result.plan.status).toBe(415);
+  });
+
+  it("applies route filters to the parsed form fields", async () => {
+    const config = buildConfig({
+      routes: {
+        stripe: {
+          source: "stripe",
+          dispatch: { mode: "wake", sessionKey: "main" },
+          filters: [{ path: "MessageStatus", equals: "delivered" }],
+        },
+      },
+    });
+    const { deps, dispatch } = harness({ config });
+
+    const ignored = await handleDelivery(
+      deps,
+      formRequest("MessageStatus=queued", "evt_a"),
+    );
+    expect(ignored.plan.code).toBe("ignored");
+
+    await handleDelivery(deps, formRequest("MessageStatus=delivered", "evt_b"));
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+});

@@ -51,7 +51,13 @@ function truncate(value: string, limit: number): string {
 
 /** Resolves a dotted path against the payload. Returns undefined if any hop misses. */
 export function resolvePath(root: unknown, path: string): unknown {
-  const segments = path.split(".").filter((s) => s.length > 0);
+  // `items[0].id` and `items.0.id` both work: the placeholder pattern accepts
+  // bracket syntax, so resolving it is the difference between an index working
+  // and rendering "(absent)".
+  const segments = path
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(".")
+    .filter((s) => s.length > 0);
   if (segments.length > MAX_PATH_DEPTH) return undefined;
 
   let current: unknown = root;

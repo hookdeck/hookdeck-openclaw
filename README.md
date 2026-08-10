@@ -97,7 +97,11 @@ You do not need to configure destination auth either. CLI destinations default t
 | `maxConcurrent` | `4` | Local admission control. In CLI transport this is the **only** limit — CLI destinations carry no `rate_limit` field. |
 | `busyRetryAfterSeconds` | `10` | `Retry-After` sent when deferring at capacity. |
 | `deferAttemptLimit` | `5` | Deferrals of the same event before the short `Retry-After` is dropped and exponential backoff takes over. Capacity that has not recovered after this many attempts is not the transient condition a short interval assumes. |
-| `dedupe.ttlHours` | `168` | Ledger retention. Must exceed Hookdeck's one-week retry ceiling. |
+| `pause.onShutdown` | `true` | Pause the connection before stopping the listener, so events are held rather than discarded. |
+| `pause.shutdownTimeoutMs` | `5000` | Budget for the whole teardown: pausing, draining and stopping children. |
+| `catchUp.enabled` | `true` | After a reconnect, replay requests that arrived while nothing was listening. |
+| `catchUp.minGapSeconds` | `30` | Below this, an outage is not worth a bulk replay. |
+| `dedupe.ttlHours` | `168` | Ledger retention, matching Hookdeck's one-week retry ceiling. Raise it if you extend retries beyond a week. |
 | `safety.allowRetryCancel` | `false` | See [Retry cancellation](#retry-cancellation). |
 | `routes.<id>.source` | — | **Required.** Hookdeck source name. |
 | `routes.<id>.path` | `/<id>` | Appended to `ingress.basePath`. Matched as a prefix — see below. |
@@ -261,7 +265,7 @@ Without `apiKey`, orphans are still detected, settled and dead-lettered — they
 
 ## Agent tools
 
-Eight tools, matching the shared contract's five operator verbs plus two read tools an agent host benefits from more than a CLI does.
+Eight tools: the shared contract's five operator verbs — `setup`, `status`, `pause`/`resume`, `replay`, `doctor` — plus three an agent host benefits from more than a CLI does. Two of those correlate what Hookdeck saw with what we did (`hookdeck_recent_deliveries`, `hookdeck_inspect_event`); the third, `hookdeck_issues`, is the dead-letter queue's own lifecycle.
 
 | Tool | Answers |
 |---|---|
@@ -341,8 +345,9 @@ Signature headers and resolved secrets are redacted from logs.
 
 Not yet implemented:
 
-- **No completion tracking for agent turns.** See [Agent turns](#agent-turns). Agent turns run through TaskFlow `run_task`, which exposes flow state rather than a completion signal, so `ackMode: "sync"` behaves as `async_retry`, and `deliver` and `lane` are recorded but not passed to the turn. Each is warned about at startup rather than failing quietly.
+- **Agent turns are fire-and-forget.** They run through TaskFlow `run_task`, which exposes flow state rather than a completion signal, so the delivery is acknowledged as soon as the run *starts*. Concretely: `ackMode: "sync"` does not wait, `maxAgentRetries` never fires, and a crash mid-run is **not** re-queued by boot recovery — the ledger row is already `succeeded`. Run durability belongs to the flow record from that point, and Hookdeck's guarantee covers delivery rather than completion. `deliver` and `lane` are likewise recorded but not passed to the turn. Every one of these warns at startup rather than failing quietly. `taskflow` and `wake` dispatch are unaffected.
 - **A signature authenticates the body, not the headers.** Hookdeck's HMAC covers the raw body only, with a project-level secret and no signed timestamp. So the event id and attempt count arrive unauthenticated, and a captured `(body, signature)` pair stays valid. Deduplication is what provides replay protection, an implausible attempt count is discarded rather than recorded, and provider verification at the Source is the layer that keeps unsigned traffic out in the first place.
+- **Form-encoded and JSON bodies only.** `application/x-www-form-urlencoded` (Twilio, Slack) and `application/json` are parsed; anything else is rejected permanently.
 - **List endpoints read the first page only.** `hookdeck_issues` and `hookdeck_recent_deliveries` report a real total from the count endpoint, but return one page of results.
 
 ## Development
@@ -353,11 +358,11 @@ npm test
 npm run typecheck
 ```
 
-559 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, the store suites inject write failures at an exact call to prove the degradation rule, and `test/store-io.test.ts` runs against a real filesystem because that is the only place durability actually lives.
+586 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, the store suites inject write failures at an exact call to prove the degradation rule, and `test/store-io.test.ts` runs against a real filesystem because that is the only place durability actually lives.
 
 ## Shared reliability contract
 
-This plugin conforms to a contract shared with the Hookdeck plugins for Hermes Agent and n8n, so that "what happens when the run fails" has the same answer in all three: the same verification rule, the same attempt-count deduplication, the same admission-control semantics, and the same operator verbs.
+This plugin conforms to a contract shared across Hookdeck's agent-platform plugins, so that "what happens when the run fails" has the same answer in each: the same verification rule, the same attempt-count deduplication, the same admission-control semantics, and the same operator verbs.
 
 Where this plugin adds something the contract does not require — retry cancellation, last-attempt dead-lettering — it defaults to off, so out-of-the-box wire behaviour matches its siblings.
 

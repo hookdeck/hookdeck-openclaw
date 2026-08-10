@@ -438,3 +438,67 @@ describe("backoff never exceeds its documented maximum", () => {
     }
   });
 });
+
+describe("readiness is not satisfied by error output", () => {
+  it("does not treat 'address already in use' as connected", () => {
+    // An unanchored /ready/ matches "already", which would report a failed
+    // launch as healthy and reset the backoff counter.
+    const pattern = /\b(connected|ready|listening|forwarding)\b/i;
+    expect(
+      pattern.test("Error: listen EADDRINUSE: address already in use"),
+    ).toBe(false);
+    expect(pattern.test("could not connect: unreadyness")).toBe(false);
+  });
+
+  it("still matches the banners it is meant to", () => {
+    const pattern = /\b(connected|ready|listening|forwarding)\b/i;
+    for (const line of [
+      "Ready! Forwarding events to http://localhost:3000",
+      "connected to Hookdeck",
+      "Listening for events",
+    ]) {
+      expect(pattern.test(line), line).toBe(true);
+    }
+  });
+});
+
+describe("teardown does not wait on a child that has already exited", () => {
+  it("returns promptly when the child exits on SIGTERM", async () => {
+    // The exit listener must be registered before the signal. A child that
+    // exits synchronously would otherwise be missed, and teardown would burn
+    // the full grace period before SIGKILLing a dead process.
+    const kills: string[] = [];
+    const listener = createCliListener(
+      {
+        routeId: "r",
+        source: "s",
+        port: 1,
+        path: "/p",
+        binaryPath: "hookdeck",
+        terminateGraceMs: 60_000,
+      },
+      {
+        spawn: () => {
+          const exitCbs: ((c: number | null, s: string | null) => void)[] = [];
+          return {
+            kill: (signal?: string) => {
+              kills.push(signal ?? "SIGTERM");
+              exitCbs.forEach((cb) => cb(0, signal ?? null));
+            },
+            onLine: () => {},
+            onExit: (cb: (c: number | null, s: string | null) => void) =>
+              exitCbs.push(cb),
+          } as unknown as ChildHandle;
+        },
+        logger: { debug: () => {}, info: () => {}, warn: () => {} },
+        onDisconnect: () => {},
+      },
+    );
+
+    listener.start();
+    await listener.stop();
+
+    expect(kills).toEqual(["SIGTERM"]);
+    expect(listener.state).toBe("stopped");
+  });
+});

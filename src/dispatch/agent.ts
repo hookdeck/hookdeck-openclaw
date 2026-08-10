@@ -7,7 +7,7 @@ import {
   retryable,
   accepted,
 } from "../protocol/outcome.js";
-import { buildPrompt, TRUST_HINT } from "../protocol/template.js";
+import { buildPrompt } from "../protocol/template.js";
 import type { DeadLetterLog } from "../store/deadletter.js";
 import type { Ledger } from "../store/ledger.js";
 import type { DispatchContext, DispatchOutcome, Dispatcher } from "./types.js";
@@ -160,15 +160,44 @@ export function createAgentDispatcher(
         reason:
           deps.client === undefined
             ? `agent run failed (${reason}); no API key configured, so it was not re-queued`
-            : `agent run failed (${reason}); exhausted after ${options.maxAgentRetries} retries`,
+            : attempted > options.maxAgentRetries
+              ? `agent run failed (${reason}); exhausted after ${options.maxAgentRetries} retries`
+              : `agent run failed (${reason}); could not ask Hookdeck to redeliver`,
         retriesCancelled: false,
         lastAttempt: true,
       });
     } catch (err) {
-      deps.logger.warn(
-        `background settle failed for ${eventId}: ${err instanceof Error ? err.message : err}`,
-      );
-      await deps.ledger.settle(eventId, "failed").catch(() => {});
+      // The 202 is already sent, so Hookdeck considers this delivered. Losing
+      // the event here would leave no Issue and no local record — the exact
+      // gap the dead-letter log exists to cover.
+      const message = err instanceof Error ? err.message : String(err);
+      deps.logger.warn(`background settle failed for ${eventId}: ${message}`);
+
+      const requeued =
+        deps.client !== undefined &&
+        (await deps.client
+          .retryEvent(eventId)
+          .then((r) => r.ok)
+          .catch(() => false));
+
+      await deps.ledger
+        .settle(eventId, requeued ? "failed" : "exhausted")
+        .catch(() => {});
+
+      if (!requeued) {
+        await deps.deadLetter
+          .record({
+            eventId,
+            ...(routeId !== undefined ? { routeId } : {}),
+            code: "agent_run_lost",
+            reason: `could not observe the agent run and could not re-queue it: ${message}`,
+            retriesCancelled: false,
+            lastAttempt: true,
+            // Hookdeck recorded a successful delivery when we answered 202.
+            hookdeckVisible: false,
+          })
+          .catch(() => {});
+      }
     } finally {
       activeRuns -= 1;
     }
@@ -264,96 +293,110 @@ export function createAgentDispatcher(
         };
       }
 
+      // Six scattered decrements is six chances to miss one, and the missed
+      // one wedges the route: `canAccept` stays false forever with nothing
+      // recorded anywhere. The slot is released in `finally` unless a
+      // background waiter has taken ownership of it.
       activeRuns += 1;
-      const started = await deps.runner.start({
-        sessionKey,
-        prompt: message,
-        eventId,
-        routeId: ctx.routeId,
-      });
-      if (!started.ok) {
-        activeRuns -= 1;
-        // Infrastructure, not input. Keep it retryable and let exponential
-        // backoff pace it — a fixed interval would burn the budget.
-        return {
-          settle: "failed",
-          plan: retryable(
-            started.retryable ? 503 : 500,
-            "agent_start_failed",
-            started.message,
-          ),
-        };
-      }
-      const runId = started.handle;
-
-      if (deps.runner.waitFor === undefined) {
-        // The transport cannot observe completion, so there is nothing to wait
-        // for and no failure to retry on. Hookdeck's job — durable delivery —
-        // is done; run durability belongs to the flow record from here.
-        activeRuns -= 1;
-        return {
-          settle: "succeeded",
-          plan: accepted("accepted", `run ${runId} started`),
-        };
-      }
-
-      if (options.ackMode === "async_retry") {
-        // The dispatcher owns settling from here: the row must stay `running`
-        // until the background run finishes, so a crash mid-run is recoverable.
-        void settleAfterRun(eventId, runId, ctx.routeId);
-        return {
-          settle: "deferred",
-          plan: accepted("accepted", `run ${runId} started`),
-        };
-      }
-
-      // sync
+      let backgroundOwnsSlot = false;
       try {
-        const result = await deps.runner.waitFor(
-          runId,
-          options.syncTimeoutSeconds * 1000,
-        );
-
-        if (result.status === "ok") {
-          activeRuns -= 1;
+        const started = await deps.runner.start({
+          sessionKey,
+          prompt: message,
+          eventId,
+          routeId: ctx.routeId,
+        });
+        if (!started.ok) {
+          // Infrastructure, not input. Keep it retryable and let exponential
+          // backoff pace it — a fixed interval would burn the budget.
           return {
-            settle: "succeeded",
-            plan: ok("dispatched", `run ${runId} completed`),
-          };
-        }
-
-        if (result.status === "timeout") {
-          // Degrade to 202: answering 5xx would redeliver work still running.
-          // The run keeps going, so the background waiter settles the row.
-          void settleAfterRun(eventId, runId, ctx.routeId);
-          return {
-            settle: "deferred",
-            plan: accepted(
-              "accepted_timeout",
-              `run ${runId} still running after timeout`,
+            settle: "failed",
+            plan: retryable(
+              started.retryable ? 503 : 500,
+              "agent_start_failed",
+              started.message,
             ),
           };
         }
+        const runId = started.handle;
 
-        activeRuns -= 1;
-        return {
-          settle: "failed",
-          plan: retryable(
-            500,
-            "agent_run_failed",
-            result.error ?? "agent run failed",
-          ),
-        };
-      } catch (err) {
-        activeRuns -= 1;
-        return {
-          settle: "failed",
-          plan: retryable(
-            500,
-            "agent_run_failed",
-            err instanceof Error ? err.message : String(err),
-          ),
-        };
+        if (deps.runner.waitFor === undefined) {
+          // Fire and forget, deliberately, and this is the SHIPPED path: the
+          // TaskFlow transport exposes flow state rather than a completion
+          // signal, so there is nothing to wait for and no failure to retry on.
+          // Hookdeck's job — durable delivery — is done, and run durability
+          // belongs to the flow record from here.
+          //
+          // The consequence worth knowing: the ledger row settles `succeeded`
+          // when the run STARTS, so a crash mid-run is not re-queued by boot
+          // recovery. Everything below that depends on observing completion —
+          // ackMode sync, maxAgentRetries, the retry budget — is inert on this
+          // transport, and each is warned about at startup.
+          return {
+            settle: "succeeded",
+            plan: accepted("accepted", `run ${runId} started`),
+          };
+        }
+
+        if (options.ackMode === "async_retry") {
+          // The dispatcher owns settling from here: the row must stay `running`
+          // until the background run finishes, so a crash mid-run is recoverable.
+          backgroundOwnsSlot = true;
+          void settleAfterRun(eventId, runId, ctx.routeId);
+          return {
+            settle: "deferred",
+            plan: accepted("accepted", `run ${runId} started`),
+          };
+        }
+
+        // sync
+        try {
+          const result = await deps.runner.waitFor(
+            runId,
+            options.syncTimeoutSeconds * 1000,
+          );
+
+          if (result.status === "ok") {
+            return {
+              settle: "succeeded",
+              plan: ok("dispatched", `run ${runId} completed`),
+            };
+          }
+
+          if (result.status === "timeout") {
+            // Degrade to 202: answering 5xx would redeliver work still running.
+            // The run keeps going, so the background waiter settles the row.
+            backgroundOwnsSlot = true;
+            void settleAfterRun(eventId, runId, ctx.routeId);
+            return {
+              settle: "deferred",
+              plan: accepted(
+                "accepted_timeout",
+                `run ${runId} still running after timeout`,
+              ),
+            };
+          }
+
+          return {
+            settle: "failed",
+            plan: retryable(
+              500,
+              "agent_run_failed",
+              result.error ?? "agent run failed",
+            ),
+          };
+        } catch (err) {
+          return {
+            settle: "failed",
+            plan: retryable(
+              500,
+              "agent_run_failed",
+              err instanceof Error ? err.message : String(err),
+            ),
+          };
+        }
+      } finally {
+        if (!backgroundOwnsSlot) activeRuns -= 1;
       }
     },
   };

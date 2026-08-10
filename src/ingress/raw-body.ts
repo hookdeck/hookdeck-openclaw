@@ -91,10 +91,14 @@ export async function readRawBody(
   try {
     const result = await Promise.race([read, timeout]);
 
-    // Destroy on any failure, not just success-by-timeout. Without this the
-    // `for await` keeps buffering after we have answered, so a slow client can
-    // hold a request's worth of memory per connection for as long as it likes.
-    if (!result.ok) destroy(req);
+    // Only on timeout, and only because that is the one case where the read
+    // loop is still running and would keep buffering after we have answered.
+    //
+    // Not on `too_large` or `aborted`: both have already stopped reading, and
+    // `IncomingMessage.destroy()` tears down the socket the response shares —
+    // so destroying here would replace the planned 413 with a connection reset,
+    // which Hookdeck retries rather than treating as final.
+    if (!result.ok && result.reason === "timeout") destroy(req);
 
     return result;
   } finally {

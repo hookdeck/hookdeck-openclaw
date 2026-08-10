@@ -257,18 +257,32 @@ export function createCliListener(
         state = "stopped";
         return;
       }
-      handle.kill("SIGTERM");
       // Bound our own teardown: the host applies no per-service stop timeout,
       // so a hanging child would block Gateway shutdown indefinitely.
+      //
+      // The exit listener goes on BEFORE the signal. A child that exits
+      // promptly would otherwise do so before anything was listening, and
+      // teardown would then wait out the whole grace period before SIGKILLing
+      // a process that had already gone.
       await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+
         const grace = setTimer(() => {
           handle.kill("SIGKILL");
-          resolve();
+          finish();
         }, options.terminateGraceMs ?? 5_000);
+
         handle.onExit(() => {
           grace.cancel();
-          resolve();
+          finish();
         });
+
+        handle.kill("SIGTERM");
       });
       state = "stopped";
     },

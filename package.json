@@ -44,9 +44,20 @@
   },
   "scripts": {
     "test": "vitest run --exclude \"test/live/**\"",
-    "test:watch": "vitest",
+    "test:watch": "vitest --exclude \"test/live/**\"",
     "typecheck": "tsc --noEmit",
     "test:live": "vitest run test/live",
     "test:agent": "bash scripts/agent-smoke.sh"
-  }
+  },
+  "homepage": "https://github.com/hookdeck/hookdeck-openclaw#readme",
+  "bugs": {
+    "url": "https://github.com/hookdeck/hookdeck-openclaw/issues"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ]
 }

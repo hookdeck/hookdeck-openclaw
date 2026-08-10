@@ -74,11 +74,19 @@ export function createFsStoreIo(): StoreIo {
       // The rename is atomic but not durable until the directory entry is
       // synced. Cursors carry `pausedByUs`, and losing that leaves a paused
       // connection nothing will unpause.
-      const dir = await open(dirname(path), "r");
+      //
+      // Best effort: opening a directory for reading is not portable — Windows
+      // refuses it — and a platform that cannot sync the entry is still better
+      // served by the rename than by a failed write.
       try {
-        await dir.sync();
-      } finally {
-        await dir.close();
+        const dir = await open(dirname(path), "r");
+        try {
+          await dir.sync();
+        } finally {
+          await dir.close();
+        }
+      } catch {
+        // Directory sync unsupported here; the rename still stands.
       }
     },
 

@@ -13,6 +13,26 @@ import {
  * confirmed, because an unscoped retry-everything costs real money.
  */
 
+export interface ReplayResult {
+  ok: boolean;
+  note?: string;
+  dryRun?: boolean;
+  /** `events` for explicit ids, `bulk` for a scoped window. */
+  mode?: "events" | "bulk";
+  outcomes?: { eventId: string; ok: boolean; error?: string }[];
+  /** Ids beyond the per-call cap, which were NOT retried. */
+  dropped?: number;
+  /** True when a rate limit stopped the batch before every id was tried. */
+  stoppedEarly?: boolean;
+  /** Ids Hookdeck no longer has, which usually means retention. */
+  notFound?: number;
+  retentionNote?: string;
+  retentionWarning?: string;
+  transportNote?: string;
+  batchId?: string | null;
+  estimated?: number | null;
+}
+
 export async function replayHandler(
   deps: ToolDeps,
   params: {
@@ -21,7 +41,7 @@ export async function replayHandler(
     sinceMinutes?: number;
     confirm?: boolean;
   },
-) {
+): Promise<ReplayResult> {
   const client = requireClient(deps);
   if (isError(client)) return { ok: false, note: client.error };
 
@@ -51,7 +71,7 @@ export async function replayHandler(
     }
     return {
       ok: true,
-      mode: "events",
+      mode: "events" as const,
       outcomes,
       // Never truncate quietly: a caller who passed 250 ids and saw "ok" would
       // reasonably believe all 250 were retried.
@@ -92,6 +112,31 @@ export async function replayHandler(
     };
   }
 
+  // The bulk query matches requests that produced NO event and at least one
+  // ignored event: the signature of "arrived while no CLI session was
+  // attached". An HTTP destination is always reachable, so it never produces
+  // that shape, and a bulk replay there would report success having replayed
+  // nothing.
+  if (deps.config.transport.mode === "http") {
+    return {
+      ok: false,
+      note:
+        `Bulk replay recovers requests that arrived while no CLI tunnel was listening, and an ` +
+        `HTTP destination never produces that shape — this would report success having replayed ` +
+        `nothing. A failed HTTP delivery stays in Hookdeck's own retry pipeline instead; pass ` +
+        `eventIds to retry specific events.`,
+    };
+  }
+
+  // `none` leaves the transport to the operator, who may well be running a
+  // tunnel of their own, so the query can still match. Say what it looks for
+  // rather than guessing.
+  const transportNote =
+    deps.config.transport.mode === "none"
+      ? "transport.mode is 'none', so this matched only if something CLI-shaped was listening: " +
+        "the query looks for requests that produced no event and at least one ignored event."
+      : undefined;
+
   // Past retention there is nothing left to replay, whatever the window says.
   // Warn rather than refuse: we cannot see the project's plan from here, and
   // guessing a limit an operator has paid to exceed would be worse.
@@ -124,7 +169,7 @@ export async function replayHandler(
   return result.ran
     ? {
         ok: true,
-        mode: "bulk",
+        mode: "bulk" as const,
         batchId: result.batchId ?? null,
         estimated: result.estimated ?? null,
         ...(beyondShortestRetention

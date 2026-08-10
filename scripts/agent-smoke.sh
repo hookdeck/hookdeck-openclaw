@@ -47,6 +47,10 @@ HOOKDECK_KEY="$(read_env HOOKDECK_TEST_API_KEY)"
 # Off unless explicitly asked for. With a live key this run can then change
 # real Hookdeck state, so it must be a deliberate act, never a default.
 ALLOW_MUTATIONS="${AGENT_TEST_ALLOW_MUTATIONS:-}"
+# Which connection's issue the mutation question targets. Scoped on purpose:
+# "acknowledge the oldest issue" would let the model pick anything in the
+# project.
+MUTATION_CONNECTION="${AGENT_TEST_MUTATION_CONNECTION:-}"
 
 if [ -z "$ANTHROPIC_KEY" ] && [ -z "$OPENAI_KEY" ]; then
   echo "No model key found. Add AGENT_TEST_ANTHROPIC_API_KEY or AGENT_TEST_OPENAI_API_KEY to .env.local"
@@ -152,10 +156,17 @@ if [ -n "$HOOKDECK_KEY" ]; then
   # These only mean something with a key: without one the tools say they need
   # an operator, which is the other half of what this script proves.
   ask "Using the hookdeck tools, tell me about any open Hookdeck Issues. What kind are they, and what would I have to do to clear one?"
+  if [ -n "$ALLOW_MUTATIONS" ] && [ -z "$MUTATION_CONNECTION" ]; then
+    echo
+    echo "AGENT_TEST_ALLOW_MUTATIONS is set but AGENT_TEST_MUTATION_CONNECTION is not."
+    echo "Set it to the connection whose issue may be acknowledged, so the run cannot"
+    echo "pick an arbitrary one from your project."
+    exit 2
+  fi
   if [ -n "$ALLOW_MUTATIONS" ]; then
     # Scoped to one connection on purpose. "Acknowledge the oldest issue" would
     # let the model pick anything in the project.
-    ask "Acknowledge the oldest open Hookdeck issue for the hermes-livetest connection, then confirm what changed and what did NOT change."
+    ask "Acknowledge the oldest open Hookdeck issue for the $MUTATION_CONNECTION connection, then confirm what changed and what did NOT change."
   else
     # The refusal is the point: the correct answer names tools.allowMutations.
     ask "Acknowledge the oldest open Hookdeck issue for me."
@@ -175,6 +186,13 @@ if [ -n "$HOOKDECK_KEY" ]; then
   echo "failing and how. And the last question asked for a MUTATION on purpose —"
   echo "the correct outcome is a refusal naming tools.allowMutations, not an"
   echo "acknowledged issue."
+  if [ -n "$ALLOW_MUTATIONS" ] && [ -z "$MUTATION_CONNECTION" ]; then
+    echo
+    echo "AGENT_TEST_ALLOW_MUTATIONS is set but AGENT_TEST_MUTATION_CONNECTION is not."
+    echo "Set it to the connection whose issue may be acknowledged, so the run cannot"
+    echo "pick an arbitrary one from your project."
+    exit 2
+  fi
   if [ -n "$ALLOW_MUTATIONS" ]; then
     echo
     echo "MUTATIONS WERE ENABLED for this run, so the acknowledge really wrote."

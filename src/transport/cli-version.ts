@@ -101,7 +101,7 @@ export function checkCliVersion(
         `hookdeck CLI ${formatVersion(version)} is below the required ${minimum}. ` +
         `Versions before 2.3.2 silently stop delivering after a session expires — ` +
         `the failure this plugin exists to prevent. Upgrade with ` +
-        `\`brew upgrade hookdeck\` or \`npm i -g hookdeck-cli@latest\`.`,
+        `\`brew upgrade hookdeck\` or \`npm i -g hookdeck-cli@${MIN_CLI_VERSION}\` or later.`,
     };
   }
   return { ok: true, version, raw: output.trim() };

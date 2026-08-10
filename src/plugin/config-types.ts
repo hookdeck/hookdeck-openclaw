@@ -112,7 +112,7 @@ export interface SafetyConfig {
   /**
    * Whether `Retry-After: -1` may be emitted to cancel Hookdeck's automatic
    * retries on permanently-invalid input. Defaults to FALSE: with it off, this
-   * plugin's wire behaviour matches the sibling Hermes and n8n plugins exactly,
+   * plugin's wire behaviour matches Hookdeck's other agent-platform plugins,
    * and enabling it only ever converts an already-failing response into one
    * that stops retrying.
    */

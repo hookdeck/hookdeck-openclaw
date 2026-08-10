@@ -30,6 +30,7 @@ import {
 } from "./src/ingress/handler.js";
 import { deferFor, retryable } from "./src/protocol/outcome.js";
 import { reconcileOrphans } from "./src/recovery.js";
+import { cancelAllAutoResumes } from "./src/tools/pause.js";
 import { registerHookdeckTools } from "./src/tools/index.js";
 import type { ToolDeps } from "./src/tools/deps.js";
 import { openDiskState } from "./src/tools/state.js";
@@ -58,6 +59,24 @@ import {
 } from "./src/transport/node-spawn.js";
 
 const PLUGIN_ID = "hookdeck";
+
+const DEFAULT_BASE_PATH = "/hookdeck";
+
+/**
+ * Picks a safe ingress path for the config-error route.
+ *
+ * Never trusts the value far enough to register a route that would swallow
+ * traffic belonging to something else.
+ */
+function fallbackBasePath(pluginConfig: unknown): string {
+  const raw = (pluginConfig as { ingress?: { basePath?: unknown } })?.ingress
+    ?.basePath;
+  if (typeof raw !== "string") return DEFAULT_BASE_PATH;
+
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  if (!trimmed.startsWith("/") || trimmed === "") return DEFAULT_BASE_PATH;
+  return trimmed;
+}
 
 interface Runtime {
   ledger: Ledger;
@@ -96,18 +115,15 @@ export default definePluginEntry({
           `config error at ${problem.path}: ${problem.message}`,
         );
       }
-      // The configured basePath, not the default: a deployment that moved the
-      // ingress would otherwise answer 404 on its real path during a config
-      // error, and the events would be lost rather than held.
-      const basePath =
-        typeof (api.pluginConfig as { ingress?: { basePath?: unknown } })
-          ?.ingress?.basePath === "string"
-          ? ((api.pluginConfig as { ingress: { basePath: string } }).ingress
-              .basePath satisfies string)
-          : "/hookdeck";
+      // The configured basePath where it is usable, so a deployment that moved
+      // its ingress still holds events rather than 404ing them. Sanitised
+      // first: the config being invalid is the whole reason we are here, and
+      // the invalid part may BE the basePath — `"/"` is rejected by the parser
+      // precisely because a prefix route there captures every Gateway request.
+      const basePath = fallbackBasePath(api.pluginConfig);
 
       api.registerHttpRoute({
-        path: basePath.startsWith("/") ? basePath : `/${basePath}`,
+        path: basePath,
         auth: "plugin",
         match: "prefix",
         replaceExisting: true,
@@ -549,6 +565,11 @@ export default definePluginEntry({
         // services are stopped BEFORE those hooks run, and `gateway_stop` is
         // capped at 5s. Connection pause and CLI teardown arrive with the
         // managed transport.
+        // Before anything is torn down: a pending auto-resume holds the deps
+        // it was created with, and firing after a restart would write through
+        // the previous run's stores.
+        cancelAllAutoResumes();
+
         const active = runtime;
         runtime = undefined;
         hostConfig = undefined;

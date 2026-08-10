@@ -1308,3 +1308,110 @@ describe("a configured-but-unresolvable API key is not reported as missing", () 
     );
   });
 });
+
+describe("bulk replay only applies where it can match anything", () => {
+  it("refuses in http mode rather than reporting a replay of nothing", async () => {
+    // The query matches requests that produced no event and at least one
+    // ignored event — the signature of "no CLI session attached". An HTTP
+    // destination never produces that shape.
+    const d = await deps(
+      {},
+      { transport: { mode: "http", publicUrl: "https://gw.example.com" } },
+    );
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+
+    const result = await replayHandler(d, {
+      routeId: "stripe",
+      sinceMinutes: 30,
+      confirm: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.note)).toMatch(/replayed\s+nothing/i);
+    expect(d.client!.bulkReplayRequests).not.toHaveBeenCalled();
+  });
+
+  it("still retries explicit event ids in http mode", async () => {
+    const d = await deps(
+      {},
+      { transport: { mode: "http", publicUrl: "https://gw.example.com" } },
+    );
+    const result = await replayHandler(d, { eventIds: ["evt_1"] });
+    expect(result.ok).toBe(true);
+    expect(d.client!.retryEvent).toHaveBeenCalledWith("evt_1");
+  });
+});
+
+describe("doctor does not mistake live work for interrupted work", () => {
+  it("reports in-progress rows without failing the check on a disk view", async () => {
+    // A disk view reads as instance "reader", so every row the running Gateway
+    // owns looks like an orphan to it.
+    const d = await deps({ source: "disk" });
+    await d.ledger.begin("evt_1", 1);
+
+    const result = await doctorHandler(d);
+    const check = result.checks.find((c) => c.name === "interrupted work")!;
+
+    expect(check.ok).toBe(true);
+    expect(check.detail).toMatch(/in progress/i);
+  });
+
+  it("still reports genuine orphans from the Gateway itself", async () => {
+    const d = await deps();
+    d.ledger = {
+      ...d.ledger,
+      listOrphans: () => [
+        {
+          eventId: "evt_1",
+          attempt: 1,
+          runCount: 1,
+          status: "running" as const,
+          updatedAt: 0,
+          owner: "a-dead-instance",
+        },
+      ],
+    };
+
+    const result = await doctorHandler(d);
+    const check = result.checks.find((c) => c.name === "interrupted work")!;
+    expect(check.ok).toBe(false);
+    expect(check.detail).toMatch(/previous process/i);
+  });
+});
+
+describe("a replay batch stops on the first rate limit", () => {
+  it("says how many of how many ran rather than failing the rest", async () => {
+    let calls = 0;
+    const d = await deps({
+      client: fakeClient({
+        retryEvent: vi.fn(async (eventId: string) => {
+          calls += 1;
+          return calls > 2
+            ? {
+                ok: false as const,
+                code: "rate_limited",
+                message: "429",
+                retryAfterSeconds: 30,
+              }
+            : { ok: true as const, data: { eventId } };
+        }),
+      }),
+    });
+
+    const result = await replayHandler(d, {
+      eventIds: ["a", "b", "c", "d", "e"],
+    });
+
+    expect(result.stoppedEarly).toBe(true);
+    expect(result.outcomes).toHaveLength(3);
+    expect(String(result.note)).toMatch(/3 of 5/);
+    expect(String(result.note)).toMatch(/30s/);
+    expect(d.client!.retryEvent).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not claim to have stopped early when it did not", async () => {
+    const d = await deps();
+    const result = await replayHandler(d, { eventIds: ["a", "b"] });
+    expect(result.stoppedEarly).toBeUndefined();
+  });
+});

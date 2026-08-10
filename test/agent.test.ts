@@ -421,3 +421,57 @@ describe("the in-dispatch capacity guard must not strand the row", () => {
     expect(outcome.settle).toBe("failed");
   });
 });
+
+describe("the concurrency slot has exactly one owner", () => {
+  it("releases it when the runner throws", async () => {
+    // The handler turns a runner throw into a retryable response, so the throw
+    // is survivable — which is precisely why a leaked slot here would go
+    // unnoticed until the route stopped accepting anything.
+    const runner = fakeRunner({
+      start: vi.fn(async () => {
+        throw new Error("host went away");
+      }),
+    });
+    const { dispatcher } = await harness({ maxConcurrentRuns: 1 }, runner);
+
+    await expect(dispatcher.dispatch(ctx)).rejects.toThrow("host went away");
+    expect(dispatcher.canAccept?.()).toBe(true);
+  });
+
+  it("stays acceptable after repeated runner throws", async () => {
+    const runner = fakeRunner({
+      start: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+    const { dispatcher } = await harness({ maxConcurrentRuns: 2 }, runner);
+
+    for (let i = 0; i < 5; i += 1) {
+      await dispatcher.dispatch(ctx).catch(() => {});
+    }
+    expect(dispatcher.canAccept?.()).toBe(true);
+  });
+
+  it("releases it when the runner refuses to start", async () => {
+    const runner = fakeRunner({
+      start: vi.fn(async () => ({
+        ok: false as const,
+        retryable: true,
+        message: "no flow",
+      })),
+    });
+    const { dispatcher } = await harness({ maxConcurrentRuns: 1 }, runner);
+
+    await dispatcher.dispatch(ctx);
+    expect(dispatcher.canAccept?.()).toBe(true);
+  });
+
+  it("releases it when the transport cannot observe completion", async () => {
+    const { dispatcher } = await harness(
+      { maxConcurrentRuns: 1 },
+      fakeRunner({ waitFor: undefined }),
+    );
+    await dispatcher.dispatch(ctx);
+    expect(dispatcher.canAccept?.()).toBe(true);
+  });
+});

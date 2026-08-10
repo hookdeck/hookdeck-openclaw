@@ -156,6 +156,14 @@ export function createTransportManager(
       if (routeId !== undefined && cursor.routeId !== routeId) continue;
       if (cursor.pausedByUs !== true || cursor.connectionId === undefined)
         continue;
+      // An operator's pause is a decision, not a breadcrumb: a reconnecting
+      // tunnel must not undo it.
+      if (cursor.pauseReason === "operator") {
+        logger.info(
+          `route '${cursor.routeId}': left paused; it was paused deliberately, not by a shutdown`,
+        );
+        continue;
+      }
       const result = await deps.client.unpauseConnection(cursor.connectionId);
       if (result.ok) {
         await cursors.patch(cursor.routeId, { pausedByUs: false });
@@ -321,14 +329,37 @@ export function createTransportManager(
 
     async stop() {
       started = false;
+
+      // Bounded as a whole. Pausing is a network call per route, and against an
+      // unreachable API the per-call timeout alone would multiply by the route
+      // count while the Gateway waits to exit.
+      const budgetMs = config.pause.shutdownTimeoutMs;
+      const deadline = now() + budgetMs;
+      const withinBudget = (): boolean => now() < deadline;
       // Pause FIRST. Stopping the listener cleanly forfeits the grace window,
       // so anything arriving between the two would be discarded rather than
       // held.
       if (config.pause.onShutdown && deps.client !== undefined) {
         for (const cursor of cursors.all()) {
           if (cursor.connectionId === undefined) continue;
+          // Only routes still configured. A route removed from config is not
+          // ours to pause, and in CLI mode nothing would ever unpause it: the
+          // resume runs from a listener attaching, and it has no listener.
+          if (config.routes[cursor.routeId] === undefined) continue;
+
+          if (!withinBudget()) {
+            logger.warn(
+              `shutdown budget of ${budgetMs}ms spent; remaining routes were not paused. ` +
+                `Events arriving before the next start may be discarded rather than held.`,
+            );
+            break;
+          }
+
           // Breadcrumb before the call: a crash here still unpauses next start.
-          await cursors.patch(cursor.routeId, { pausedByUs: true });
+          await cursors.patch(cursor.routeId, {
+            pausedByUs: true,
+            pauseReason: "shutdown",
+          });
           const result = await deps.client.pauseConnection(cursor.connectionId);
           if (!result.ok) {
             logger.warn(
