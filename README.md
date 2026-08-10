@@ -66,11 +66,19 @@ That serves `POST /hookdeck/stripe` on the Gateway.
 npx hookdeck-cli@latest listen 18789 stripe --path /hookdeck/stripe
 ```
 
-`hookdeck listen` takes the source as a required positional and forwards exactly one source per process, so run one per route.
+`hookdeck listen` takes the source as a required positional and forwards exactly one source per process, so run one per route. It auto-creates the source and a CLI destination for you.
 
-**4. Set the destination's auth to `HOOKDECK_SIGNATURE`** on the connection, so deliveries carry `x-hookdeck-signature`.
+**4. Fire a test event.** The agent wakes with the event text.
 
-**5. Fire a test event.** The agent wakes with the event text.
+### No API key required
+
+The plugin needs **only the signing secret**. It makes no Hookdeck API calls, so there is nothing to authenticate. The Hookdeck CLI has its own separate credential (`hookdeck login`, or guest mode with no account at all).
+
+You do not need to configure destination auth either. CLI destinations default to `auth_type: HOOKDECK_SIGNATURE` — applied server-side, so deliveries forwarded by `hookdeck listen` carry `x-hookdeck-signature` and the full `x-hookdeck-*` header set, with the body passed through byte-for-byte. Verification therefore runs identically in local dev and production, which is the point.
+
+> This is not stated in Hookdeck's docs, which is a documentation gap rather than a caveat. Note also that CLI destination auth is API-only — the dashboard's destination editor exposes an Authentication dropdown for HTTP and Mock API destinations but only "CLI Path" for CLI ones. The default still applies.
+
+**If local deliveries are rejected with `401`, the likely cause is a project mismatch, not missing headers.** The signing secret is per-project, so a secret from one project will not verify traffic from another. Check the CLI is logged into the same project the secret came from.
 
 ## Configuration
 
