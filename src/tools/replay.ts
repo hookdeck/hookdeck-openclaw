@@ -149,6 +149,7 @@ export async function replayHandler(
     return {
       ok: false,
       dryRun: true,
+      ...(transportNote !== undefined ? { transportNote } : {}),
       note:
         `Would replay requests for route '${params.routeId}' from the last ${params.sinceMinutes} minute(s) ` +
         `that produced no CLI event. Re-run with confirm: true to execute.`,
@@ -175,6 +176,7 @@ export async function replayHandler(
         ...(beyondShortestRetention
           ? { retentionWarning: RETENTION_NOTE }
           : {}),
+        ...(transportNote !== undefined ? { transportNote } : {}),
       }
     : { ok: false, note: `replay did not run: ${result.reason}` };
 }

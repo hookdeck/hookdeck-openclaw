@@ -76,9 +76,14 @@ export async function pauseHandler(
     });
     const result = await client.pauseConnection(cursor.connectionId);
     if (!result.ok) {
+      // Restore what was there, rather than asserting "not paused": a
+      // shutdown breadcrumb underneath this must survive, or the connection is
+      // left paused with nothing to lift it.
       await deps.cursors.patch(params.routeId, {
-        pausedByUs: false,
-        pauseReason: "shutdown",
+        pausedByUs: cursor.pausedByUs === true,
+        ...(cursor.pauseReason !== undefined
+          ? { pauseReason: cursor.pauseReason }
+          : {}),
       });
       return { ok: false, note: result.message };
     }
@@ -110,10 +115,10 @@ export async function pauseHandler(
   cancelPendingAutoResume(params.routeId);
   const result = await client.unpauseConnection(cursor.connectionId);
   if (!result.ok) return { ok: false, note: result.message };
-  await deps.cursors.patch(params.routeId, {
-    pausedByUs: false,
-    pauseReason: "shutdown",
-  });
+  // Cleared, not reset to a value: "resumed" has no pause reason, and leaving
+  // `shutdown` there would be a breadcrumb for something that already happened.
+  await deps.cursors.patch(params.routeId, { pausedByUs: false });
+  await deps.cursors.clear(params.routeId, "pauseReason");
   return {
     ok: true,
     paused: false,

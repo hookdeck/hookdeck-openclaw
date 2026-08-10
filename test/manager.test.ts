@@ -671,3 +671,71 @@ describe("recovery runs when a listener attaches", () => {
     await mgr.stop();
   });
 });
+
+describe("a deliberate pause survives a restart", () => {
+  it("is not reclassified as a shutdown breadcrumb by stop()", async () => {
+    // The whole point of the operator/shutdown distinction: stamping
+    // `shutdown` over it would make the next connect resume a pipeline
+    // someone stopped on purpose.
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    await cursors.patch("stripe", {
+      connectionId: "web_1",
+      pausedByUs: true,
+      pauseReason: "operator",
+    });
+
+    const client = fakeClient();
+    const mgr = createTransportManager({
+      config: config({ pause: { onShutdown: true, shutdownTimeoutMs: 5_000 } }),
+      cursors,
+      logger: silent,
+      client,
+      spawn: () => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }),
+      resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+      readVersion: async () => "hookdeck version 2.4.0",
+    });
+
+    await mgr.start();
+    await mgr.stop();
+
+    expect(cursors.get("stripe")?.pauseReason).toBe("operator");
+    // Already paused, so re-pausing it would only spend the shutdown budget.
+    expect(client.pauseConnection).not.toHaveBeenCalled();
+  });
+
+  it("does not pause a disabled route, which nothing would ever resume", async () => {
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    await cursors.patch("off", { connectionId: "web_off" });
+
+    const client = fakeClient();
+    const mgr = createTransportManager({
+      config: config({
+        pause: { onShutdown: true, shutdownTimeoutMs: 5_000 },
+        routes: {
+          off: {
+            source: "off",
+            enabled: false,
+            dispatch: { mode: "wake", sessionKey: "m" },
+          },
+        },
+      }),
+      cursors,
+      logger: silent,
+      client,
+      spawn: () => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }),
+      resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+      readVersion: async () => "hookdeck version 2.4.0",
+    });
+
+    await mgr.start();
+    await mgr.stop();
+
+    expect(client.pauseConnection).not.toHaveBeenCalled();
+  });
+});

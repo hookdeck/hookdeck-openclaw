@@ -152,3 +152,29 @@ describe("TRUST_HINT", () => {
     );
   });
 });
+
+describe("array indexes in placeholder paths", () => {
+  it("resolves bracket syntax, which the placeholder pattern accepts", () => {
+    // The pattern allows `[0]`, so failing to resolve it renders "(absent)"
+    // for a path the template author was told they could write.
+    expect(
+      resolvePath({ items: [{ id: "a" }, { id: "b" }] }, "items[1].id"),
+    ).toBe("b");
+  });
+
+  it("resolves the dotted equivalent identically", () => {
+    expect(resolvePath({ items: [{ id: "a" }] }, "items.0.id")).toBe("a");
+  });
+
+  it("returns undefined for an index past the end", () => {
+    expect(resolvePath({ items: ["a"] }, "items[5]")).toBeUndefined();
+  });
+
+  it("renders an indexed value in a prompt", () => {
+    const rendered = buildPrompt("Charge {{payload.data[0].id}}", {
+      routeId: "stripe",
+      payload: { data: [{ id: "ch_123" }] },
+    });
+    expect(rendered).toContain("ch_123");
+  });
+});

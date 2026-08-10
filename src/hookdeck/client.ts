@@ -262,10 +262,24 @@ export function createHookdeckClient(
           };
         }
 
+        // `permanent` means a retry of this exact request cannot succeed: the
+        // event is gone, or the request is malformed or unauthorised. Callers
+        // use it to decide whether to keep a row for the next attempt or give
+        // up on it. 429 is excluded deliberately — it is the retryable 4xx.
+        const permanent =
+          response.status >= 400 &&
+          response.status < 500 &&
+          response.status !== 429;
+
         return {
           ok: false,
           status: response.status,
-          code: response.status === 404 ? "not_found" : "api_error",
+          code:
+            response.status === 404
+              ? "not_found"
+              : permanent
+                ? "permanent_error"
+                : "api_error",
           message,
         };
       }

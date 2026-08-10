@@ -190,3 +190,63 @@ describe("reconcileOrphans", () => {
     ).resolves.toMatchObject({ failed: 1 });
   });
 });
+
+describe("an orphan that cannot be recovered must not come back forever", () => {
+  async function reconcileWith(
+    eventId: string,
+    result: Awaited<ReturnType<EventRetrier["retryEvent"]>>,
+  ) {
+    const { ledger, deadLetter } = await crashedLedger([eventId]);
+    await reconcileOrphans({
+      ledger,
+      deadLetter,
+      logger: silent,
+      client: fakeClient({ retryEvent: vi.fn(async () => result) }),
+      maxEvents: 50,
+      enabled: true,
+    });
+    return { ledger, deadLetter };
+  }
+
+  it("settles a row whose event has aged out of retention", async () => {
+    // Left running, it is re-found on every boot: a duplicate dead-letter each
+    // time, and since orphans are recovered oldest-first it consumes the budget
+    // ahead of events that could actually be recovered.
+    const { ledger } = await reconcileWith("evt_gone", {
+      ok: false,
+      code: "not_found",
+      message: "gone",
+    });
+
+    expect(ledger.get("evt_gone")?.status).toBe("failed");
+    expect(ledger.listOrphans()).toHaveLength(0);
+  });
+
+  it("settles on any permanent client error, not only 404", async () => {
+    const { ledger } = await reconcileWith("evt_bad", {
+      ok: false,
+      code: "permanent_error",
+      message: "422 unprocessable",
+    });
+    expect(ledger.get("evt_bad")?.status).toBe("failed");
+  });
+
+  it("leaves a transiently-failed row running, to retry on the next start", async () => {
+    const { ledger } = await reconcileWith("evt_flaky", {
+      ok: false,
+      code: "network_error",
+      message: "ETIMEDOUT",
+    });
+    expect(ledger.get("evt_flaky")?.status).toBe("running");
+    expect(ledger.listOrphans()).toHaveLength(1);
+  });
+
+  it("settles only after Hookdeck accepts a successful redelivery", async () => {
+    const { ledger, deadLetter } = await reconcileWith("evt_ok", {
+      ok: true,
+      data: { eventId: "evt_ok" },
+    });
+    expect(ledger.get("evt_ok")?.status).toBe("failed");
+    expect(deadLetter.count()).toBe(0);
+  });
+});

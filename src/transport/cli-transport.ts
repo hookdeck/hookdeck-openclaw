@@ -80,7 +80,7 @@ export interface CliListener {
 
 // Word-bounded: an unanchored `ready` matches "address already in use", which
 // would report a failed launch as connected and reset the backoff counter.
-const DEFAULT_READINESS = /\b(connected|ready|listening|forwarding)\b/i;
+export const DEFAULT_READINESS = /\b(connected|ready|listening|forwarding)\b/i;
 const RING_SIZE = 50;
 
 export function buildListenArgs(options: CliListenerOptions): string[] {

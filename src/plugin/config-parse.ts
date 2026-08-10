@@ -278,31 +278,27 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     }
 
     if (route.dispatch.mode === "agent") {
-      // Both are carried in the config and neither reaches the runner: agent
-      // turns go through TaskFlow `run_task`, which takes a goal and nothing
-      // else. Saying so is better than an operator setting `deliver: false` and
-      // believing it is doing something.
-      if (route.dispatch.deliver) {
-        warnings.push({
-          path: `routes.${routeId}.dispatch.deliver`,
-          message:
-            "deliver has no effect on the TaskFlow transport and is not passed to the agent turn; it is recorded for a future transport that can carry it",
-        });
-      }
-      if (route.dispatch.lane !== undefined) {
-        warnings.push({
-          path: `routes.${routeId}.dispatch.lane`,
-          message:
-            "lane has no effect on the TaskFlow transport and is not passed to the agent turn",
-        });
-      }
-      if (route.dispatch.ackMode === "sync") {
-        warnings.push({
-          path: `routes.${routeId}.dispatch.ackMode`,
-          message:
-            "sync needs a completion signal the TaskFlow transport does not provide; this route will behave as async_retry",
-        });
-      }
+      // Agent turns go through TaskFlow `run_task`, which takes a goal and
+      // exposes flow state rather than a completion signal. Several dispatch
+      // options therefore describe behaviour this transport cannot produce.
+      // One warning per route, naming them: silence would let an operator
+      // believe a safety setting was in force.
+      const inert: string[] = [];
+      if (route.dispatch.deliver) inert.push("deliver");
+      if (route.dispatch.lane !== undefined) inert.push("lane");
+      if (route.dispatch.ackMode === "sync") inert.push('ackMode: "sync"');
+
+      warnings.push({
+        path: `routes.${routeId}.dispatch`,
+        message:
+          "agent turns are fire-and-forget on the TaskFlow transport: the delivery is acknowledged as " +
+          "soon as the run STARTS, so nothing waits for it and no run failure is ever observed. " +
+          "maxAgentRetries and syncTimeoutSeconds therefore never take effect, and a crash mid-run is " +
+          "not re-queued by recovery — run durability belongs to the flow record" +
+          (inert.length > 0
+            ? `. ${inert.join(", ")} ${inert.length === 1 ? "is" : "are"} recorded but not passed to the turn`
+            : ""),
+      });
     }
 
     routes[routeId] = {

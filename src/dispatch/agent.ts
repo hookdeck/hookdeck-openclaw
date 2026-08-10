@@ -173,6 +173,13 @@ export function createAgentDispatcher(
       const message = err instanceof Error ? err.message : String(err);
       deps.logger.warn(`background settle failed for ${eventId}: ${message}`);
 
+      // Settled BEFORE the retry, matching the success path above: Hookdeck
+      // can redeliver within milliseconds, and the redelivery's `begin` opens
+      // the next run's row — which a late settle would stamp `failed`.
+      // `failed` is the optimistic guess; it is corrected to `exhausted` below
+      // if the redelivery could not be requested.
+      await deps.ledger.settle(eventId, "failed").catch(() => {});
+
       const requeued =
         deps.client !== undefined &&
         (await deps.client
@@ -180,9 +187,9 @@ export function createAgentDispatcher(
           .then((r) => r.ok)
           .catch(() => false));
 
-      await deps.ledger
-        .settle(eventId, requeued ? "failed" : "exhausted")
-        .catch(() => {});
+      if (!requeued) {
+        await deps.ledger.settle(eventId, "exhausted").catch(() => {});
+      }
 
       if (!requeued) {
         await deps.deadLetter

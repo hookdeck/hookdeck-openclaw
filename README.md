@@ -98,7 +98,7 @@ You do not need to configure destination auth either. CLI destinations default t
 | `busyRetryAfterSeconds` | `10` | `Retry-After` sent when deferring at capacity. |
 | `deferAttemptLimit` | `5` | Deferrals of the same event before the short `Retry-After` is dropped and exponential backoff takes over. Capacity that has not recovered after this many attempts is not the transient condition a short interval assumes. |
 | `pause.onShutdown` | `true` | Pause the connection before stopping the listener, so events are held rather than discarded. |
-| `pause.shutdownTimeoutMs` | `5000` | Budget for the whole teardown: pausing, draining and stopping children. |
+| `pause.shutdownTimeoutMs` | `5000` | Budget for pausing connections at shutdown. Stopping the CLI children is bounded separately, by a SIGTERM grace before SIGKILL. |
 | `catchUp.enabled` | `true` | After a reconnect, replay requests that arrived while nothing was listening. |
 | `catchUp.minGapSeconds` | `30` | Below this, an outage is not worth a bulk replay. |
 | `dedupe.ttlHours` | `168` | Ledger retention, matching Hookdeck's one-week retry ceiling. Raise it if you extend retries beyond a week. |
@@ -358,7 +358,7 @@ npm test
 npm run typecheck
 ```
 
-586 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, the store suites inject write failures at an exact call to prove the degradation rule, and `test/store-io.test.ts` runs against a real filesystem because that is the only place durability actually lives.
+613 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, the store suites inject write failures at an exact call to prove the degradation rule, and `test/store-io.test.ts` runs against a real filesystem because that is the only place durability actually lives.
 
 ## Shared reliability contract
 

@@ -126,23 +126,23 @@ export async function reconcileOrphans(
       attemptCount: row.attempt,
     });
 
-    // A 404 means the event has aged out of Hookdeck's retention: no future
-    // boot will do better, so the row is settled. Anything else may be
-    // transient — a network fault, a rate limit — and is left `running` for the
-    // next boot to retry.
+    // A permanent failure — the event aged out of retention, the request was
+    // rejected — will not go better on the next boot, so the row is settled.
+    // Transient failures (network, rate limit, 5xx) leave it `running` to be
+    // retried then.
     //
-    // Leaving a permanently dead row running would make it an orphan forever:
-    // one duplicate dead-letter per boot, and since orphans are recovered
-    // oldest-first it would consume the budget ahead of events that could
-    // actually be recovered.
-    if (result.code === "not_found") {
-      await ledger.settle(row.eventId, "failed");
-    }
+    // Leaving a permanently dead row running makes it an orphan forever: one
+    // duplicate dead-letter per boot, and since orphans are recovered
+    // oldest-first it consumes the budget ahead of events that could actually
+    // be recovered.
+    const permanent =
+      result.code === "not_found" || result.code === "permanent_error";
+    if (permanent) await ledger.settle(row.eventId, "failed");
 
     logger.warn(
       `could not re-queue interrupted event ${row.eventId}: ${result.message}` +
-        (result.code === "not_found"
-          ? " (aged out of retention; not retried again)"
+        (permanent
+          ? " (permanent; not retried again)"
           : " (will be retried on the next start)"),
     );
   }

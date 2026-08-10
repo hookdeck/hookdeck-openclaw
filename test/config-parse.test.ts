@@ -363,3 +363,78 @@ describe("validation that runs late still rejects", () => {
     }
   });
 });
+
+describe("options the shipped transport cannot honour are named", () => {
+  const agentRoute = (dispatch: Record<string, unknown> = {}) =>
+    parseHookdeckConfig({
+      signingSecret: "whsec",
+      routes: {
+        a: {
+          source: "a",
+          dispatch: {
+            mode: "agent",
+            sessionKey: "s",
+            prompt: "p",
+            ...dispatch,
+          },
+        },
+      },
+    });
+
+  function dispatchWarning(dispatch: Record<string, unknown> = {}): string {
+    const result = agentRoute(dispatch);
+    if (!result.ok) throw new Error(JSON.stringify(result.problems));
+    const warning = result.warnings.find((w) => w.path === "routes.a.dispatch");
+    expect(
+      warning,
+      "an agent route must carry the fire-and-forget warning",
+    ).toBeTruthy();
+    return warning!.message;
+  }
+
+  it("says plainly that agent turns do not wait", () => {
+    const message = dispatchWarning();
+    expect(message).toMatch(/fire-and-forget/i);
+    expect(message).toMatch(/as soon as the run STARTS/);
+  });
+
+  it("names maxAgentRetries and syncTimeoutSeconds, which have defaults and never fire", () => {
+    const message = dispatchWarning();
+    expect(message).toContain("maxAgentRetries");
+    expect(message).toContain("syncTimeoutSeconds");
+  });
+
+  it("warns that a crash mid-run is not re-queued", () => {
+    expect(dispatchWarning()).toMatch(/not re-queued by recovery/i);
+  });
+
+  it("names the options that are set but not passed to the turn", () => {
+    const message = dispatchWarning({
+      deliver: true,
+      lane: "background",
+      ackMode: "sync",
+    });
+    for (const option of ["deliver", "lane", 'ackMode: "sync"']) {
+      expect(message).toContain(option);
+    }
+  });
+
+  it("does not list options that were not set", () => {
+    // "the delivery is acknowledged" contains "deliver", so this checks for the
+    // clause that lists them rather than for the word.
+    expect(dispatchWarning()).not.toContain("recorded but not passed");
+  });
+
+  it("says nothing of the sort for wake or taskflow routes", () => {
+    const result = parseHookdeckConfig({
+      signingSecret: "whsec",
+      routes: {
+        a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } },
+      },
+    });
+    if (!result.ok) throw new Error("should parse");
+    expect(
+      result.warnings.find((w) => w.path === "routes.a.dispatch"),
+    ).toBeUndefined();
+  });
+});

@@ -3,6 +3,7 @@ import { createBackoff } from "../src/transport/backoff.js";
 import {
   buildListenArgs,
   createCliListener,
+  DEFAULT_READINESS,
   type ChildHandle,
 } from "../src/transport/cli-transport.js";
 import { scrubSecrets } from "../src/plugin/secrets.js";
@@ -457,7 +458,7 @@ describe("readiness is not satisfied by error output", () => {
       "connected to Hookdeck",
       "Listening for events",
     ]) {
-      expect(pattern.test(line), line).toBe(true);
+      expect(DEFAULT_READINESS.test(line), line).toBe(true);
     }
   });
 });

@@ -475,3 +475,62 @@ describe("the concurrency slot has exactly one owner", () => {
     expect(dispatcher.canAccept?.()).toBe(true);
   });
 });
+
+describe("a transport fault after the 202 is not silently lost", () => {
+  // Hookdeck already recorded a successful delivery, so no Issue will open. If
+  // we lose it here it is gone with nothing anywhere saying so.
+  function rejectingRunner() {
+    return fakeRunner({
+      waitFor: vi.fn(async () => {
+        throw new Error("websocket closed");
+      }),
+    });
+  }
+
+  it("asks Hookdeck to redeliver, and settles before doing so", async () => {
+    const client = {
+      retryEvent: vi.fn(async (eventId: string) => ({
+        ok: true as const,
+        data: { eventId },
+      })),
+    };
+    const { dispatcher, ledger } = await harness(
+      { ackMode: "async_retry" },
+      rejectingRunner(),
+      client,
+    );
+
+    await dispatcher.dispatch(ctx);
+    await settled();
+
+    expect(client.retryEvent).toHaveBeenCalledWith(ctx.delivery.eventId);
+    expect(ledger.get(ctx.delivery.eventId!)?.status).toBe("failed");
+  });
+
+  it("dead-letters when it cannot be re-queued, flagged as invisible to Hookdeck", async () => {
+    const { dispatcher, ledger, deadLetter } = await harness(
+      { ackMode: "async_retry" },
+      rejectingRunner(),
+      undefined,
+    );
+
+    await dispatcher.dispatch(ctx);
+    await settled();
+
+    expect(ledger.get(ctx.delivery.eventId!)?.status).toBe("exhausted");
+    expect(deadLetter.list()[0]).toMatchObject({
+      code: "agent_run_lost",
+      hookdeckVisible: false,
+    });
+  });
+
+  it("frees the concurrency slot either way", async () => {
+    const { dispatcher } = await harness(
+      { ackMode: "async_retry", maxConcurrentRuns: 1 },
+      rejectingRunner(),
+    );
+    await dispatcher.dispatch(ctx);
+    await settled();
+    expect(dispatcher.canAccept?.()).toBe(true);
+  });
+});

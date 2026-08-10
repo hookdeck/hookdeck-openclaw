@@ -142,8 +142,14 @@ export function retryable(
  * must name a reason from the allowlist, and each emission is logged and
  * counted by the caller.
  *
- * Always dead-letters. If we are telling Hookdeck to stop trying, the payload
- * has to survive locally or it is simply lost.
+ * Dead-letters everything past signature verification. If we are telling
+ * Hookdeck to stop trying, the payload has to survive locally or it is simply
+ * lost.
+ *
+ * Cancellations BEFORE verification — wrong method, wrong content type,
+ * oversized — are deliberately not recorded. The ingress is public and the log
+ * is bounded, so recording unauthenticated traffic would let a scanner evict
+ * the failures that matter.
  */
 export function cancelRetries(
   reason: CancelReason,

@@ -347,6 +347,16 @@ export function createTransportManager(
           // resume runs from a listener attaching, and it has no listener.
           if (config.routes[cursor.routeId] === undefined) continue;
 
+          // An operator's pause is already the state we want, and overwriting
+          // its reason with `shutdown` would turn it into a breadcrumb the next
+          // connect lifts — resuming a pipeline someone stopped on purpose.
+          // Skipping also saves a redundant pause call against the budget.
+          if (cursor.pauseReason === "operator") continue;
+
+          // A route left in config but disabled has no listener in CLI mode,
+          // so nothing would ever unpause it.
+          if (config.routes[cursor.routeId]?.enabled === false) continue;
+
           if (!withinBudget()) {
             logger.warn(
               `shutdown budget of ${budgetMs}ms spent; remaining routes were not paused. ` +

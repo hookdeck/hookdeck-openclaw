@@ -164,8 +164,9 @@ if [ -n "$HOOKDECK_KEY" ]; then
     exit 2
   fi
   if [ -n "$ALLOW_MUTATIONS" ]; then
-    # Scoped to one connection on purpose. "Acknowledge the oldest issue" would
-    # let the model pick anything in the project.
+    # Scoped to one connection on purpose: "acknowledge the oldest issue" would
+    # let the model pick anything in the project. The connection is required at
+    # startup, so it is set by the time we get here.
     ask "Acknowledge the oldest open Hookdeck issue for the $MUTATION_CONNECTION connection, then confirm what changed and what did NOT change."
   else
     # The refusal is the point: the correct answer names tools.allowMutations.

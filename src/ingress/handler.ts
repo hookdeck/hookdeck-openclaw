@@ -96,24 +96,28 @@ function parseFormUrlEncoded(body: string): Record<string, unknown> {
   return out;
 }
 
+/** The mime type alone, lower-cased, with any parameters dropped. */
+function mimeType(
+  headers: Record<string, string | string[] | undefined>,
+): string | undefined {
+  const raw = headers["content-type"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string") return undefined;
+  return value.split(";")[0]?.trim().toLowerCase();
+}
+
 function contentTypeIsFormEncoded(
   headers: Record<string, string | string[] | undefined>,
 ): boolean {
-  const raw = headers["content-type"];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  return (
-    typeof value === "string" &&
-    value.toLowerCase().includes("application/x-www-form-urlencoded")
-  );
+  // The mime, not a substring search over the whole header: a parameter that
+  // happens to contain this string would otherwise reclassify a JSON body.
+  return mimeType(headers) === "application/x-www-form-urlencoded";
 }
 
 function contentTypeIsJson(
   headers: Record<string, string | string[] | undefined>,
 ): boolean {
-  const raw = headers["content-type"];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (typeof value !== "string") return false;
-  const mime = value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const mime = mimeType(headers) ?? "";
   return mime === "application/json" || mime.endsWith("+json");
 }
 
