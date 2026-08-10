@@ -35,7 +35,8 @@ export type SpawnChild = (
   env: Record<string, string>,
 ) => ChildHandle;
 
-export type TransportState = "stopped" | "starting" | "connected" | "restarting" | "failed";
+export type TransportState =
+  "stopped" | "starting" | "connected" | "restarting" | "failed";
 
 export interface CliListenerOptions {
   routeId: string;
@@ -129,13 +130,17 @@ export function createCliListener(
     if (options.apiKey !== undefined) env.HOOKDECK_API_KEY = options.apiKey;
 
     const args = buildListenArgs(options);
-    deps.logger.debug(`[${options.routeId}] ${options.binaryPath} ${args.join(" ")}`);
+    deps.logger.debug(
+      `[${options.routeId}] ${options.binaryPath} ${args.join(" ")}`,
+    );
 
     let handle: ChildHandle;
     try {
       handle = deps.spawn(options.binaryPath, args, env);
     } catch (err) {
-      record(`spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+      record(
+        `spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       scheduleRestart();
       return;
     }
@@ -178,7 +183,9 @@ export function createCliListener(
         return;
       }
       record(`exited code=${code ?? "null"} signal=${signal ?? "none"}`);
-      deps.logger.warn(`[${options.routeId}] listener exited (code ${code ?? "null"})`);
+      deps.logger.warn(
+        `[${options.routeId}] listener exited (code ${code ?? "null"})`,
+      );
       scheduleRestart();
     });
   }

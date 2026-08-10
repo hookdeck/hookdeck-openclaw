@@ -19,7 +19,11 @@ import type { DispatchContext, DispatchOutcome, Dispatcher } from "./types.js";
 export interface SystemRuntime {
   enqueueSystemEvent(
     text: string,
-    options: { sessionKey: string; contextKey?: string | null; replace?: boolean },
+    options: {
+      sessionKey: string;
+      contextKey?: string | null;
+      replace?: boolean;
+    },
   ): boolean;
   requestHeartbeat(options: {
     source: string;
@@ -56,13 +60,19 @@ export function createWakeDispatcher(
 
       let enqueued: boolean;
       try {
-        enqueued = system.enqueueSystemEvent(text, { sessionKey: config.sessionKey });
+        enqueued = system.enqueueSystemEvent(text, {
+          sessionKey: config.sessionKey,
+        });
       } catch (err) {
         // A throw here is an infrastructure problem, not bad input — keep the
         // event alive in Hookdeck so it lands after the operator fixes it.
         return {
           settle: "failed",
-          plan: retryable(503, "wake_failed", err instanceof Error ? err.message : String(err)),
+          plan: retryable(
+            503,
+            "wake_failed",
+            err instanceof Error ? err.message : String(err),
+          ),
         };
       }
 
@@ -86,7 +96,10 @@ export function createWakeDispatcher(
           // re-enqueue and duplicate.
           return {
             settle: "succeeded",
-            plan: ok("dispatched", `enqueued; heartbeat request failed: ${String(err)}`),
+            plan: ok(
+              "dispatched",
+              `enqueued; heartbeat request failed: ${String(err)}`,
+            ),
           };
         }
       }

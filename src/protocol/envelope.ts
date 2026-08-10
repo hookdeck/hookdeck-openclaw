@@ -13,7 +13,14 @@ import { z } from "zod";
  */
 
 const jsonValue: z.ZodType<unknown> = z.lazy(() =>
-  z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(jsonValue), z.record(z.string(), jsonValue)]),
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValue),
+    z.record(z.string(), jsonValue),
+  ]),
 );
 
 const withRevision = {
@@ -55,7 +62,10 @@ export const envelopeSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list_flows") }),
   z.object({ action: z.literal("find_latest_flow") }),
   z.object({ action: z.literal("resolve_flow"), token: z.string().min(1) }),
-  z.object({ action: z.literal("get_task_summary"), flowId: z.string().min(1) }),
+  z.object({
+    action: z.literal("get_task_summary"),
+    flowId: z.string().min(1),
+  }),
   z.object({
     action: z.literal("set_waiting"),
     ...withRevision,
@@ -95,8 +105,7 @@ export const envelopeSchema = z.discriminatedUnion("action", [
 export type TaskFlowEnvelope = z.infer<typeof envelopeSchema>;
 
 export type EnvelopeParseResult =
-  | { ok: true; envelope: TaskFlowEnvelope }
-  | { ok: false; errors: string[] };
+  { ok: true; envelope: TaskFlowEnvelope } | { ok: false; errors: string[] };
 
 export function parseTaskFlowEnvelope(payload: unknown): EnvelopeParseResult {
   const parsed = envelopeSchema.safeParse(payload);

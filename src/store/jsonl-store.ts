@@ -65,15 +65,28 @@ const EVICT_INTERVAL = 256;
 
 type Envelope<T> = { k: string; d?: T; x?: true };
 
-export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T> {
-  const { path, io, keyOf, isLive, onDegrade, compactionRatio = DEFAULT_COMPACTION_RATIO } = options;
+export function createJsonlStore<T>(
+  options: JsonlStoreOptions<T>,
+): JsonlStore<T> {
+  const {
+    path,
+    io,
+    keyOf,
+    isLive,
+    onDegrade,
+    compactionRatio = DEFAULT_COMPACTION_RATIO,
+  } = options;
   const now = options.now ?? Date.now;
 
   const memory = new Map<string, T>();
   const persistent = path !== undefined && io !== undefined;
 
   const readOnly = options.readOnly === true;
-  let persistence: PersistenceState = persistent ? (readOnly ? "readonly" : "active") : "off";
+  let persistence: PersistenceState = persistent
+    ? readOnly
+      ? "readonly"
+      : "active"
+    : "off";
   let appended = 0;
   let compactions = 0;
   let sinceEvict = 0;
@@ -127,7 +140,13 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
 
   async function compactNow(): Promise<void> {
     evictExpired();
-    if (!persistent || persistence !== "active" || path === undefined || io === undefined) return;
+    if (
+      !persistent ||
+      persistence !== "active" ||
+      path === undefined ||
+      io === undefined
+    )
+      return;
     const lines = [...memory].map(([k, d]) => serialise({ k, d }));
     await io.writeAtomic(path, lines.length > 0 ? `${lines.join("\n")}\n` : "");
     appended = 0;

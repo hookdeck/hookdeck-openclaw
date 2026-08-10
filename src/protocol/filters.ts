@@ -54,14 +54,20 @@ export function evaluateFilters(
 
     if (filter.equals !== undefined) {
       if (value !== filter.equals) {
-        return { matched: false, reason: `${filter.path} !== ${JSON.stringify(filter.equals)}` };
+        return {
+          matched: false,
+          reason: `${filter.path} !== ${JSON.stringify(filter.equals)}`,
+        };
       }
       continue;
     }
 
     if (filter.in !== undefined) {
       if (!filter.in.includes(value as string | number | boolean)) {
-        return { matched: false, reason: `${filter.path} not in ${JSON.stringify(filter.in)}` };
+        return {
+          matched: false,
+          reason: `${filter.path} not in ${JSON.stringify(filter.in)}`,
+        };
       }
       continue;
     }

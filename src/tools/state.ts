@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { createDeadLetterLog, type DeadLetterLog } from "../store/deadletter.js";
+import {
+  createDeadLetterLog,
+  type DeadLetterLog,
+} from "../store/deadletter.js";
 import { createCursorStore, type CursorStore } from "../store/cursor-store.js";
 import { createLedger, type Ledger } from "../store/ledger.js";
 import { createFsStoreIo } from "../store/store-io.js";

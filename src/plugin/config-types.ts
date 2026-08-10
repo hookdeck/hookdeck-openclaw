@@ -14,8 +14,7 @@ import type { RouteFilter } from "../protocol/filters.js";
 export type { RouteFilter };
 
 export type SecretInput =
-  | string
-  | { source: "env" | "file" | "exec"; provider: string; id: string };
+  string | { source: "env" | "file" | "exec"; provider: string; id: string };
 
 export interface WakeDispatchConfig {
   mode: "wake";
@@ -65,7 +64,8 @@ export interface AgentDispatchConfig {
   lane?: string;
 }
 
-export type DispatchConfig = WakeDispatchConfig | TaskFlowDispatchConfig | AgentDispatchConfig;
+export type DispatchConfig =
+  WakeDispatchConfig | TaskFlowDispatchConfig | AgentDispatchConfig;
 
 export interface RouteConfig {
   enabled: boolean;

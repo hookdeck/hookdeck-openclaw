@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createWakeDispatcher, renderWakeText, type SystemRuntime } from "../src/dispatch/wake.js";
+import {
+  createWakeDispatcher,
+  renderWakeText,
+  type SystemRuntime,
+} from "../src/dispatch/wake.js";
 import { parseHookdeckDelivery } from "../src/protocol/delivery.js";
 
 function delivery(overrides: Record<string, string> = {}) {
@@ -47,13 +51,20 @@ describe("createWakeDispatcher", () => {
       system,
     );
 
-    const result = await dispatcher.dispatch({ routeId: "stripe", delivery: delivery(), payload: {} });
+    const result = await dispatcher.dispatch({
+      routeId: "stripe",
+      delivery: delivery(),
+      payload: {},
+    });
 
     expect(result.settle).toBe("succeeded");
     expect(result.plan.status).toBe(200);
-    expect(system.enqueueSystemEvent).toHaveBeenCalledWith("Webhook received from stripe", {
-      sessionKey: "hook:stripe",
-    });
+    expect(system.enqueueSystemEvent).toHaveBeenCalledWith(
+      "Webhook received from stripe",
+      {
+        sessionKey: "hook:stripe",
+      },
+    );
   });
 
   it("requests an immediate heartbeat for wakeMode 'now'", async () => {
@@ -83,7 +94,10 @@ describe("createWakeDispatcher", () => {
 
   it("defaults to 'now' when wakeMode is omitted", async () => {
     const system = fakeSystem();
-    await createWakeDispatcher({ mode: "wake", sessionKey: "s" }, system).dispatch({
+    await createWakeDispatcher(
+      { mode: "wake", sessionKey: "s" },
+      system,
+    ).dispatch({
       routeId: "stripe",
       delivery: delivery(),
       payload: {},
@@ -95,7 +109,10 @@ describe("createWakeDispatcher", () => {
     // enqueueSystemEvent returns false for empty text or duplicate suppression.
     // Neither improves on retry.
     const system = fakeSystem({ enqueueSystemEvent: vi.fn(() => false) });
-    const result = await createWakeDispatcher({ mode: "wake", sessionKey: "s" }, system).dispatch({
+    const result = await createWakeDispatcher(
+      { mode: "wake", sessionKey: "s" },
+      system,
+    ).dispatch({
       routeId: "stripe",
       delivery: delivery(),
       payload: {},
@@ -112,7 +129,10 @@ describe("createWakeDispatcher", () => {
         throw new Error("no session");
       }),
     });
-    const result = await createWakeDispatcher({ mode: "wake", sessionKey: "s" }, system).dispatch({
+    const result = await createWakeDispatcher(
+      { mode: "wake", sessionKey: "s" },
+      system,
+    ).dispatch({
       routeId: "stripe",
       delivery: delivery(),
       payload: {},
@@ -130,7 +150,10 @@ describe("createWakeDispatcher", () => {
         throw new Error("heartbeat busy");
       }),
     });
-    const result = await createWakeDispatcher({ mode: "wake", sessionKey: "s" }, system).dispatch({
+    const result = await createWakeDispatcher(
+      { mode: "wake", sessionKey: "s" },
+      system,
+    ).dispatch({
       routeId: "stripe",
       delivery: delivery(),
       payload: {},

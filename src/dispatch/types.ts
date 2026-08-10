@@ -11,7 +11,8 @@ import type { ResponsePlan } from "../protocol/outcome.js";
  * eagerly would tell the next boot the work completed, and a crash mid-run
  * would go unrecovered.
  */
-export type SettleInstruction = "succeeded" | "failed" | "exhausted" | "deferred";
+export type SettleInstruction =
+  "succeeded" | "failed" | "exhausted" | "deferred";
 
 export interface DispatchOutcome {
   settle: SettleInstruction;

@@ -7,9 +7,16 @@ import {
   type ProvisionRouteSpec,
 } from "../hookdeck/provision.js";
 import type { Logger } from "../ingress/handler.js";
-import type { HookdeckPluginConfig, RouteConfig } from "../plugin/config-types.js";
+import type {
+  HookdeckPluginConfig,
+  RouteConfig,
+} from "../plugin/config-types.js";
 import type { CursorStore } from "../store/cursor-store.js";
-import { createCliListener, type CliListener, type SpawnChild } from "./cli-transport.js";
+import {
+  createCliListener,
+  type CliListener,
+  type SpawnChild,
+} from "./cli-transport.js";
 import { checkCliVersion, describeShadowing } from "./cli-version.js";
 
 /**
@@ -45,7 +52,9 @@ export interface TransportManagerDeps {
   apiKey?: string | undefined;
   resolveBinary(name: string): Promise<{ path: string; all: string[] }>;
   /** Resolves a route's provider credentials; they are secret inputs like any other. */
-  resolveVerification?(routeId: string): Promise<Record<string, string> | undefined>;
+  resolveVerification?(
+    routeId: string,
+  ): Promise<Record<string, string> | undefined>;
   readVersion(path: string): Promise<string>;
   now?(): number;
 }
@@ -53,20 +62,29 @@ export interface TransportManagerDeps {
 export interface TransportManager {
   start(): Promise<void>;
   stop(): Promise<void>;
-  status(): Record<string, { state: string; restarts: number; recent: string[] }>;
+  status(): Record<
+    string,
+    { state: string; restarts: number; recent: string[] }
+  >;
 }
 
-export function createTransportManager(deps: TransportManagerDeps): TransportManager {
+export function createTransportManager(
+  deps: TransportManagerDeps,
+): TransportManager {
   const { config, cursors, logger } = deps;
   const now = deps.now ?? Date.now;
   const listeners = new Map<string, CliListener>();
 
-  async function specFor(routeId: string, route: RouteConfig): Promise<ProvisionRouteSpec> {
+  async function specFor(
+    routeId: string,
+    route: RouteConfig,
+  ): Promise<ProvisionRouteSpec> {
     const credentials =
-      route.verification !== undefined ? await deps.resolveVerification?.(routeId) : undefined;
+      route.verification !== undefined
+        ? await deps.resolveVerification?.(routeId)
+        : undefined;
     return routeProvisionSpec({ config, routeId, route, credentials });
   }
-
 
   /** Adopts an operator-supplied connection id, so pause and catch-up work
    * without provisioning having run. */
@@ -87,8 +105,13 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
       const print = fingerprint(spec);
       const cursor = cursors.get(routeId);
 
-      if (!config.provisioning.force && cursor?.provisioningFingerprint === print) {
-        logger.debug(`route '${routeId}': provisioning unchanged, skipping upsert`);
+      if (
+        !config.provisioning.force &&
+        cursor?.provisioningFingerprint === print
+      ) {
+        logger.debug(
+          `route '${routeId}': provisioning unchanged, skipping upsert`,
+        );
         continue;
       }
 
@@ -96,27 +119,36 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
       if (!result.ok) {
         // Never fatal: an operator may have provisioned by hand, and a Gateway
         // that will not boot is worse than one that is not provisioned.
-        logger.warn(`route '${routeId}': provisioning failed (${result.message})`);
+        logger.warn(
+          `route '${routeId}': provisioning failed (${result.message})`,
+        );
         continue;
       }
       await cursors.patch(routeId, {
         provisioningFingerprint: print,
         connectionId: result.data.id,
       });
-      logger.info(`route '${routeId}': connection ${result.data.id} provisioned`);
+      logger.info(
+        `route '${routeId}': connection ${result.data.id} provisioned`,
+      );
     }
   }
 
   async function unpauseIfWePaused(): Promise<void> {
     if (deps.client === undefined) return;
     for (const cursor of cursors.all()) {
-      if (cursor.pausedByUs !== true || cursor.connectionId === undefined) continue;
+      if (cursor.pausedByUs !== true || cursor.connectionId === undefined)
+        continue;
       const result = await deps.client.unpauseConnection(cursor.connectionId);
       if (result.ok) {
         await cursors.patch(cursor.routeId, { pausedByUs: false });
-        logger.info(`route '${cursor.routeId}': unpaused; held events will be delivered`);
+        logger.info(
+          `route '${cursor.routeId}': unpaused; held events will be delivered`,
+        );
       } else {
-        logger.warn(`route '${cursor.routeId}': could not unpause (${result.message})`);
+        logger.warn(
+          `route '${cursor.routeId}': could not unpause (${result.message})`,
+        );
       }
     }
   }
@@ -125,7 +157,11 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
     if (!config.catchUp.enabled || deps.client === undefined) return;
     for (const routeId of Object.keys(config.routes)) {
       const cursor = cursors.get(routeId);
-      if (cursor?.lastDisconnectAt === undefined || cursor.connectionId === undefined) continue;
+      if (
+        cursor?.lastDisconnectAt === undefined ||
+        cursor.connectionId === undefined
+      )
+        continue;
 
       const result = await runCatchUp({
         client: deps.client,
@@ -138,7 +174,9 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
       if (result.ran) {
         logger.info(
           `route '${routeId}': catch-up replay queued${
-            result.estimated !== undefined ? ` (~${result.estimated} requests)` : ""
+            result.estimated !== undefined
+              ? ` (~${result.estimated} requests)`
+              : ""
           }`,
         );
         await cursors.clear(routeId, "lastDisconnectAt");
@@ -149,7 +187,9 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
   async function startListeners(apiKey: string | undefined): Promise<void> {
     if (config.transport.mode !== "cli") return;
 
-    const { path: binaryPath, all } = await deps.resolveBinary(config.transport.binaryPath);
+    const { path: binaryPath, all } = await deps.resolveBinary(
+      config.transport.binaryPath,
+    );
     const shadowWarning = describeShadowing(all);
     if (shadowWarning !== undefined) logger.warn(shadowWarning);
 
@@ -169,10 +209,14 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
       if (!config.transport.allowUnsupportedVersion) {
         // A hard gate, because the failure it prevents is invisible: the CLI
         // stays connected, reports itself healthy, and stops delivering.
-        logger.warn(`${check.message} Transport not started; ingress still serves.`);
+        logger.warn(
+          `${check.message} Transport not started; ingress still serves.`,
+        );
         return;
       }
-      logger.warn(`${check.message} Continuing because allowUnsupportedVersion is set.`);
+      logger.warn(
+        `${check.message} Continuing because allowUnsupportedVersion is set.`,
+      );
     }
 
     for (const [routeId, route] of Object.entries(config.routes)) {
@@ -219,18 +263,25 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
           await cursors.patch(cursor.routeId, { pausedByUs: true });
           const result = await deps.client.pauseConnection(cursor.connectionId);
           if (!result.ok) {
-            logger.warn(`route '${cursor.routeId}': could not pause (${result.message})`);
+            logger.warn(
+              `route '${cursor.routeId}': could not pause (${result.message})`,
+            );
             await cursors.patch(cursor.routeId, { pausedByUs: false });
           }
         }
       }
 
-      await Promise.all([...listeners.values()].map((l) => l.stop().catch(() => {})));
+      await Promise.all(
+        [...listeners.values()].map((l) => l.stop().catch(() => {})),
+      );
       listeners.clear();
     },
 
     status() {
-      const out: Record<string, { state: string; restarts: number; recent: string[] }> = {};
+      const out: Record<
+        string,
+        { state: string; restarts: number; recent: string[] }
+      > = {};
       for (const [routeId, listener] of listeners) {
         out[routeId] = {
           state: listener.state,

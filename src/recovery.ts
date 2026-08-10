@@ -44,10 +44,17 @@ export interface ReconcileSummary {
 
 export const DEFAULT_MAX_RECOVERY_EVENTS = 50;
 
-export async function reconcileOrphans(options: ReconcileOptions): Promise<ReconcileSummary> {
+export async function reconcileOrphans(
+  options: ReconcileOptions,
+): Promise<ReconcileSummary> {
   const { ledger, deadLetter, logger, client } = options;
   const maxEvents = options.maxEvents ?? DEFAULT_MAX_RECOVERY_EVENTS;
-  const summary: ReconcileSummary = { found: 0, retried: 0, failed: 0, skipped: 0 };
+  const summary: ReconcileSummary = {
+    found: 0,
+    retried: 0,
+    failed: 0,
+    skipped: 0,
+  };
 
   const orphans = ledger.listOrphans();
   summary.found = orphans.length;
@@ -61,7 +68,9 @@ export async function reconcileOrphans(options: ReconcileOptions): Promise<Recon
     return summary;
   }
 
-  logger.info(`reconciling ${orphans.length} interrupted event(s) from a previous run`);
+  logger.info(
+    `reconciling ${orphans.length} interrupted event(s) from a previous run`,
+  );
 
   // Oldest first: if the budget truncates, the events closest to falling out of
   // Hookdeck's retention window are the ones that get recovered.
@@ -106,7 +115,9 @@ export async function reconcileOrphans(options: ReconcileOptions): Promise<Recon
       lastAttempt: false,
       attemptCount: row.attempt,
     });
-    logger.warn(`could not re-queue interrupted event ${row.eventId}: ${result.message}`);
+    logger.warn(
+      `could not re-queue interrupted event ${row.eventId}: ${result.message}`,
+    );
   }
 
   if (summary.skipped > 0 && client !== undefined) {

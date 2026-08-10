@@ -13,7 +13,12 @@ function config(overrides: Record<string, unknown> = {}): HookdeckPluginConfig {
   const parsed = parseHookdeckConfig({
     signingSecret: "whsec",
     apiKey: "key",
-    routes: { stripe: { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" } } },
+    routes: {
+      stripe: {
+        source: "stripe",
+        dispatch: { mode: "wake", sessionKey: "main" },
+      },
+    },
     ...overrides,
   });
   if (!parsed.ok) throw new Error(JSON.stringify(parsed.problems));
@@ -22,32 +27,74 @@ function config(overrides: Record<string, unknown> = {}): HookdeckPluginConfig {
 
 function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
   return {
-    retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
-    upsertConnection: vi.fn(async () => ({ ok: true as const, data: { id: "web_1" } })),
-    getConnection: vi.fn(async () => ({ ok: true as const, data: { id: "web_1" } })),
-    pauseConnection: vi.fn(async () => ({ ok: true as const, data: { id: "web_1" } })),
-    unpauseConnection: vi.fn(async () => ({ ok: true as const, data: { id: "web_1" } })),
-    bulkReplayRequests: vi.fn(async () => ({ ok: true as const, data: { id: "bulk_1" } })),
+    retryEvent: vi.fn(async (eventId: string) => ({
+      ok: true as const,
+      data: { eventId },
+    })),
+    upsertConnection: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "web_1" },
+    })),
+    getConnection: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "web_1" },
+    })),
+    pauseConnection: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "web_1" },
+    })),
+    unpauseConnection: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "web_1" },
+    })),
+    bulkReplayRequests: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "bulk_1" },
+    })),
     listEvents: vi.fn(async () => ({ ok: true as const, data: [] })),
     getEvent: vi.fn(async () => ({ ok: true as const, data: { id: "evt_1" } })),
     getEventBody: vi.fn(async () => ({ ok: true as const, data: {} })),
     listIssues: vi.fn(async () => ({ ok: true as const, data: [] })),
     countIssues: vi.fn(async () => ({ ok: true as const, data: 0 })),
+    getIssue: vi.fn(async (id: string) => ({
+      ok: true as const,
+      data: { id },
+    })),
+    updateIssue: vi.fn(async (id: string) => ({
+      ok: true as const,
+      data: { id },
+    })),
+    dismissIssue: vi.fn(async (id: string) => ({
+      ok: true as const,
+      data: { id },
+    })),
+    listAttempts: vi.fn(async () => ({ ok: true as const, data: [] })),
     ...overrides,
   };
 }
 
-async function manager(cfg: HookdeckPluginConfig, client = fakeClient(), nowMs = 1_000_000) {
+async function manager(
+  cfg: HookdeckPluginConfig,
+  client = fakeClient(),
+  nowMs = 1_000_000,
+) {
   const io = createFakeStoreIo();
   const cursors = await createCursorStore({ stateDir: "/state", io });
-  const spawn = vi.fn(() => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }));
+  const spawn = vi.fn(() => ({
+    kill: () => {},
+    onLine: () => {},
+    onExit: () => {},
+  }));
   const mgr = createTransportManager({
     config: cfg,
     cursors,
     logger: silent,
     client,
     spawn,
-    resolveBinary: async () => ({ path: "/usr/local/bin/hookdeck", all: ["/usr/local/bin/hookdeck"] }),
+    resolveBinary: async () => ({
+      path: "/usr/local/bin/hookdeck",
+      all: ["/usr/local/bin/hookdeck"],
+    }),
     readVersion: async () => "hookdeck version 2.4.0",
     now: () => nowMs,
   });
@@ -62,7 +109,9 @@ describe("provisioning", () => {
   });
 
   it("upserts and records the connection id and fingerprint", async () => {
-    const { mgr, cursors, client } = await manager(config({ provisioning: { enabled: true } }));
+    const { mgr, cursors, client } = await manager(
+      config({ provisioning: { enabled: true } }),
+    );
     await mgr.start();
 
     expect(client.upsertConnection).toHaveBeenCalledOnce();
@@ -72,7 +121,9 @@ describe("provisioning", () => {
   });
 
   it("skips an unchanged upsert on the next start", async () => {
-    const { mgr, client } = await manager(config({ provisioning: { enabled: true } }));
+    const { mgr, client } = await manager(
+      config({ provisioning: { enabled: true } }),
+    );
     await mgr.start();
     await mgr.stop();
     await mgr.start();
@@ -80,7 +131,9 @@ describe("provisioning", () => {
   });
 
   it("re-upserts when forced", async () => {
-    const { mgr, client } = await manager(config({ provisioning: { enabled: true, force: true } }));
+    const { mgr, client } = await manager(
+      config({ provisioning: { enabled: true, force: true } }),
+    );
     await mgr.start();
     await mgr.start();
     expect(client.upsertConnection).toHaveBeenCalledTimes(2);
@@ -97,7 +150,10 @@ describe("provisioning", () => {
         message: "destination.config.auth is required",
       })),
     });
-    const { mgr } = await manager(config({ provisioning: { enabled: true } }), client);
+    const { mgr } = await manager(
+      config({ provisioning: { enabled: true } }),
+      client,
+    );
     await expect(mgr.start()).resolves.toBeUndefined();
   });
 });
@@ -106,7 +162,9 @@ describe("shutdown ordering", () => {
   it("pauses the connection before stopping the listener", async () => {
     // A clean CLI shutdown tombstones the session and forfeits the grace
     // window, so events arriving next are discarded rather than held.
-    const { mgr, cursors, client } = await manager(config({ provisioning: { enabled: true } }));
+    const { mgr, cursors, client } = await manager(
+      config({ provisioning: { enabled: true } }),
+    );
     await mgr.start();
     await mgr.stop();
 
@@ -119,12 +177,17 @@ describe("shutdown ordering", () => {
     // next start, or the connection stays paused forever — a silent outage.
     let markedWhenCalled: boolean | undefined;
     const client = fakeClient();
-    const { mgr, cursors } = await manager(config({ provisioning: { enabled: true } }), client);
+    const { mgr, cursors } = await manager(
+      config({ provisioning: { enabled: true } }),
+      client,
+    );
     await mgr.start();
-    (client.pauseConnection as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      markedWhenCalled = cursors.get("stripe")?.pausedByUs;
-      return { ok: true as const, data: { id: "web_1" } };
-    });
+    (client.pauseConnection as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => {
+        markedWhenCalled = cursors.get("stripe")?.pausedByUs;
+        return { ok: true as const, data: { id: "web_1" } };
+      },
+    );
     await mgr.stop();
     expect(markedWhenCalled).toBe(true);
   });
@@ -137,7 +200,10 @@ describe("shutdown ordering", () => {
         message: "down",
       })),
     });
-    const { mgr, cursors } = await manager(config({ provisioning: { enabled: true } }), client);
+    const { mgr, cursors } = await manager(
+      config({ provisioning: { enabled: true } }),
+      client,
+    );
     await mgr.start();
     await mgr.stop();
     expect(cursors.get("stripe")?.pausedByUs).toBe(false);
@@ -153,7 +219,9 @@ describe("shutdown ordering", () => {
   });
 
   it("unpauses on the next start, so a paused connection is never left stuck", async () => {
-    const { mgr, cursors, client } = await manager(config({ provisioning: { enabled: true } }));
+    const { mgr, cursors, client } = await manager(
+      config({ provisioning: { enabled: true } }),
+    );
     await mgr.start();
     await mgr.stop();
     await mgr.start();
@@ -164,7 +232,8 @@ describe("shutdown ordering", () => {
 });
 
 describe("CLI version gating", () => {
-  const cliConfig = () => config({ transport: { mode: "cli" }, provisioning: { enabled: true } });
+  const cliConfig = () =>
+    config({ transport: { mode: "cli" }, provisioning: { enabled: true } });
 
   it("starts a listener per enabled route on a supported version", async () => {
     const { mgr, spawn } = await manager(cliConfig());
@@ -175,7 +244,11 @@ describe("CLI version gating", () => {
   it("refuses to start on a version that silently stops delivering", async () => {
     const io = createFakeStoreIo();
     const cursors = await createCursorStore({ stateDir: "/state", io });
-    const spawn = vi.fn(() => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }));
+    const spawn = vi.fn(() => ({
+      kill: () => {},
+      onLine: () => {},
+      onExit: () => {},
+    }));
     const mgr = createTransportManager({
       config: cliConfig(),
       cursors,
@@ -193,7 +266,11 @@ describe("CLI version gating", () => {
   it("does not start a listener when the binary cannot be run", async () => {
     const io = createFakeStoreIo();
     const cursors = await createCursorStore({ stateDir: "/state", io });
-    const spawn = vi.fn(() => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }));
+    const spawn = vi.fn(() => ({
+      kill: () => {},
+      onLine: () => {},
+      onExit: () => {},
+    }));
     const mgr = createTransportManager({
       config: cliConfig(),
       cursors,
@@ -212,9 +289,18 @@ describe("CLI version gating", () => {
 
 describe("catch-up", () => {
   it("builds a time-bounded query for requests nothing was listening for", () => {
-    const query = buildCatchUpQuery({ sinceMs: 1_700_000_000_000, sourceId: "src_1" });
-    expect(query).toMatchObject({ cli_events_count: 0, ignored_count: { gte: 1 }, source_id: "src_1" });
-    expect((query.ingested_at as { gte: string }).gte).toBe("2023-11-14T22:13:20.000Z");
+    const query = buildCatchUpQuery({
+      sinceMs: 1_700_000_000_000,
+      sourceId: "src_1",
+    });
+    expect(query).toMatchObject({
+      cli_events_count: 0,
+      ignored_count: { gte: 1 },
+      source_id: "src_1",
+    });
+    expect((query.ingested_at as { gte: string }).gte).toBe(
+      "2023-11-14T22:13:20.000Z",
+    );
   });
 
   it("skips a gap too small to be worth a bulk operation", async () => {
@@ -264,7 +350,9 @@ describe("catch-up", () => {
   });
 
   it("runs on start when a disconnect was recorded, then clears the cursor", async () => {
-    const { mgr, cursors, client } = await manager(config({ provisioning: { enabled: true } }));
+    const { mgr, cursors, client } = await manager(
+      config({ provisioning: { enabled: true } }),
+    );
     await mgr.start();
     await cursors.patch("stripe", { lastDisconnectAt: 1_000 });
     await mgr.start();
@@ -283,14 +371,21 @@ describe("review regressions", () => {
       const io = createFakeStoreIo();
       const cursors = await createCursorStore({ stateDir: "/state", io });
       const spawn = vi.fn<
-        (c: string, a: readonly string[], e: Record<string, string>) => {
+        (
+          c: string,
+          a: readonly string[],
+          e: Record<string, string>,
+        ) => {
           kill: () => void;
           onLine: () => void;
           onExit: () => void;
         }
       >(() => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }));
       const mgr = createTransportManager({
-        config: config({ transport: { mode: "cli" }, provisioning: { enabled: true } }),
+        config: config({
+          transport: { mode: "cli" },
+          provisioning: { enabled: true },
+        }),
         cursors,
         logger: silent,
         client: fakeClient(),
@@ -330,7 +425,9 @@ describe("review regressions", () => {
   });
 
   it("clears the disconnect cursor outright rather than storing an undefined", async () => {
-    const { mgr, cursors } = await manager(config({ provisioning: { enabled: true } }));
+    const { mgr, cursors } = await manager(
+      config({ provisioning: { enabled: true } }),
+    );
     await mgr.start();
     await cursors.patch("stripe", { lastDisconnectAt: 1_000 });
     await mgr.start();

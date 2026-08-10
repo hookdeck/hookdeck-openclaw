@@ -7,13 +7,14 @@
   },
   "contracts": {
     "tools": [
-      "hookdeck_status",
-      "hookdeck_recent_deliveries",
-      "hookdeck_inspect_event",
       "hookdeck_doctor",
-      "hookdeck_setup",
+      "hookdeck_inspect_event",
+      "hookdeck_issues",
       "hookdeck_pause",
-      "hookdeck_replay"
+      "hookdeck_recent_deliveries",
+      "hookdeck_replay",
+      "hookdeck_setup",
+      "hookdeck_status"
     ]
   },
   "configContracts": {

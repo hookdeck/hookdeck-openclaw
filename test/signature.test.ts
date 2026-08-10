@@ -35,9 +35,9 @@ const PREVIOUS_SIGNATURE = "PljPtCnQQANTnDNccZxPiqBg64Ej/yNDT71Yty9I9u4=";
 describe("computeHookdeckSignature", () => {
   for (const [name, vector] of Object.entries(VECTORS)) {
     it(`matches the openssl golden vector (${name})`, () => {
-      expect(computeHookdeckSignature(Buffer.from(vector.body, "utf8"), SECRET)).toBe(
-        vector.signature,
-      );
+      expect(
+        computeHookdeckSignature(Buffer.from(vector.body, "utf8"), SECRET),
+      ).toBe(vector.signature);
     });
   }
 });
@@ -99,8 +99,11 @@ describe("verifyHookdeckSignature", () => {
 
   it("rejects when no signature header is present at all", () => {
     expect(
-      verifyHookdeckSignature({ rawBody: body, secret: SECRET, signatures: [undefined, undefined] })
-        .valid,
+      verifyHookdeckSignature({
+        rawBody: body,
+        secret: SECRET,
+        signatures: [undefined, undefined],
+      }).valid,
     ).toBe(false);
   });
 
@@ -133,13 +136,19 @@ describe("verifyHookdeckSignature", () => {
   it("does NOT verify when the body is re-serialised from parsed JSON", () => {
     // Why we read raw bytes rather than using the host's JSON helper: whitespace
     // is not preserved, so the HMAC no longer matches.
-    const reserialised = Buffer.from(JSON.stringify(JSON.parse('{"hello": "world"}')), "utf8");
+    const reserialised = Buffer.from(
+      JSON.stringify(JSON.parse('{"hello": "world"}')),
+      "utf8",
+    );
     expect(
       verifyHookdeckSignature({
         rawBody: reserialised,
         secret: SECRET,
         signatures: [
-          computeHookdeckSignature(Buffer.from('{"hello": "world"}', "utf8"), SECRET),
+          computeHookdeckSignature(
+            Buffer.from('{"hello": "world"}', "utf8"),
+            SECRET,
+          ),
           undefined,
         ],
       }).valid,

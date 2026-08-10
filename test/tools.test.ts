@@ -3,6 +3,7 @@ import type { HookdeckClient } from "../src/hookdeck/client.js";
 import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
 import {
   doctorHandler,
+  issuesHandler,
   inspectEventHandler,
   pauseHandler,
   recentDeliveriesHandler,
@@ -22,29 +23,93 @@ const silent = { debug: () => {}, info: () => {}, warn: () => {} };
 
 function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
   return {
-    retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
-    upsertConnection: vi.fn(async () => ({ ok: true as const, data: { id: "web_1" } })),
+    retryEvent: vi.fn(async (eventId: string) => ({
+      ok: true as const,
+      data: { eventId },
+    })),
+    upsertConnection: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "web_1" },
+    })),
     getConnection: vi.fn(async () => ({
       ok: true as const,
-      data: { id: "web_1", rules: [{ type: "retry", response_status_codes: [...RETRYABLE_STATUS_CODES] }] },
+      data: {
+        id: "web_1",
+        rules: [
+          { type: "retry", response_status_codes: [...RETRYABLE_STATUS_CODES] },
+        ],
+      },
     })),
-    pauseConnection: vi.fn(async () => ({ ok: true as const, data: { id: "web_1" } })),
-    unpauseConnection: vi.fn(async () => ({ ok: true as const, data: { id: "web_1" } })),
-    bulkReplayRequests: vi.fn(async () => ({ ok: true as const, data: { id: "bulk_1" } })),
+    pauseConnection: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "web_1" },
+    })),
+    unpauseConnection: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "web_1" },
+    })),
+    bulkReplayRequests: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "bulk_1" },
+    })),
     listEvents: vi.fn(async () => ({ ok: true as const, data: [] })),
-    getEvent: vi.fn(async () => ({ ok: true as const, data: { id: "evt_1", status: "FAILED", attempts: 3 } })),
+    getEvent: vi.fn(async () => ({
+      ok: true as const,
+      data: { id: "evt_1", status: "FAILED", attempts: 3 },
+    })),
     getEventBody: vi.fn(async () => ({ ok: true as const, data: {} })),
-    listIssues: vi.fn(async () => ({ ok: true as const, data: [{ id: "iss_1" }] })),
+    listIssues: vi.fn(async () => ({
+      ok: true as const,
+      data: [{ id: "iss_1", type: "delivery", status: "OPENED" }],
+    })),
+    getIssue: vi.fn(async (id: string) => ({
+      ok: true as const,
+      data: { id, status: "OPENED", type: "delivery" },
+    })),
+    updateIssue: vi.fn(async (id: string) => ({
+      ok: true as const,
+      data: { id },
+    })),
+    dismissIssue: vi.fn(async (id: string) => ({
+      ok: true as const,
+      data: { id },
+    })),
+    listAttempts: vi.fn(async () => ({
+      ok: true as const,
+      data: [
+        {
+          id: "atm_1",
+          attempt_number: 1,
+          status: "FAILED",
+          response_status: 500,
+        },
+        {
+          id: "atm_2",
+          attempt_number: 2,
+          status: "FAILED",
+          response_status: null,
+          error_code: "TIMEOUT",
+        },
+      ],
+    })),
     countIssues: vi.fn(async () => ({ ok: true as const, data: 1 })),
     ...overrides,
   };
 }
 
-async function deps(overrides: Partial<ToolDeps> = {}, cfgOverrides = {}): Promise<ToolDeps> {
+async function deps(
+  overrides: Partial<ToolDeps> = {},
+  cfgOverrides = {},
+): Promise<ToolDeps> {
   const parsed = parseHookdeckConfig({
     signingSecret: "whsec",
     apiKey: "key",
-    routes: { stripe: { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" } } },
+    routes: {
+      stripe: {
+        source: "stripe",
+        dispatch: { mode: "wake", sessionKey: "main" },
+      },
+    },
     ...cfgOverrides,
   });
   if (!parsed.ok) throw new Error(JSON.stringify(parsed.problems));
@@ -70,7 +135,11 @@ describe("hookdeck_status", () => {
     const d = await deps();
     const result = await statusHandler(d, {});
 
-    expect(result.routes[0]).toMatchObject({ routeId: "stripe", dispatch: "wake", enabled: true });
+    expect(result.routes[0]).toMatchObject({
+      routeId: "stripe",
+      dispatch: "wake",
+      enabled: true,
+    });
     expect(result.inFlight).toEqual({ current: 0, max: 4 });
     expect(result.ledger.persistence).toBe("off");
     expect(result.openIssues).toBe(1);
@@ -81,7 +150,12 @@ describe("hookdeck_status", () => {
     const io = createFakeStoreIo({ failAfter: 0 });
     const d = await deps();
     const { createLedger } = await import("../src/store/ledger.js");
-    d.ledger = await createLedger({ ttlHours: 168, instanceId: "t", stateDir: "/s", io });
+    d.ledger = await createLedger({
+      ttlHours: 168,
+      instanceId: "t",
+      stateDir: "/s",
+      io,
+    });
     await d.ledger.begin("evt_1", 1);
 
     const result = await statusHandler(d, {});
@@ -97,12 +171,15 @@ describe("hookdeck_status", () => {
   });
 
   it("can be scoped to one route", async () => {
-    const d = await deps({}, {
-      routes: {
-        a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } },
-        b: { source: "b", dispatch: { mode: "wake", sessionKey: "m" } },
+    const d = await deps(
+      {},
+      {
+        routes: {
+          a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } },
+          b: { source: "b", dispatch: { mode: "wake", sessionKey: "m" } },
+        },
       },
-    });
+    );
     expect((await statusHandler(d, { routeId: "b" })).routes).toHaveLength(1);
   });
 });
@@ -124,16 +201,28 @@ describe("hookdeck_recent_deliveries", () => {
     // successful delivery — so no Issue will ever cover them.
     const d = await deps();
     await d.deadLetter.record({
-      eventId: "evt_pre", routeId: "stripe", code: "malformed_json", reason: "bad",
-      retriesCancelled: true, lastAttempt: true, hookdeckVisible: true,
+      eventId: "evt_pre",
+      routeId: "stripe",
+      code: "malformed_json",
+      reason: "bad",
+      retriesCancelled: true,
+      lastAttempt: true,
+      hookdeckVisible: true,
     });
     await d.deadLetter.record({
-      eventId: "evt_post", routeId: "stripe", code: "agent_run_failed", reason: "died",
-      retriesCancelled: false, lastAttempt: true, hookdeckVisible: false,
+      eventId: "evt_post",
+      routeId: "stripe",
+      code: "agent_run_failed",
+      reason: "died",
+      retriesCancelled: false,
+      lastAttempt: true,
+      hookdeckVisible: false,
     });
 
     const result = await recentDeliveriesHandler(d, {});
-    expect(result.unreportedFailures.map((r) => r.eventId)).toEqual(["evt_post"]);
+    expect(result.unreportedFailures.map((r) => r.eventId)).toEqual([
+      "evt_post",
+    ]);
     expect(result.locallyRecorded.map((r) => r.eventId)).toEqual(["evt_pre"]);
   });
 
@@ -174,7 +263,9 @@ describe("hookdeck_recent_deliveries", () => {
     // Successful deliveries leave no local record by design, so "empty" is
     // ambiguous without saying so.
     const d = await deps({
-      client: fakeClient({ listIssues: vi.fn(async () => ({ ok: true as const, data: [] })) }),
+      client: fakeClient({
+        listIssues: vi.fn(async () => ({ ok: true as const, data: [] })),
+      }),
     });
     const result = await recentDeliveriesHandler(d, {});
     expect(result.unreportedFailures).toHaveLength(0);
@@ -184,10 +275,16 @@ describe("hookdeck_recent_deliveries", () => {
   it("filters by route", async () => {
     const d = await deps();
     await d.deadLetter.record({
-      eventId: "e1", routeId: "other", code: "x", reason: "y",
-      retriesCancelled: false, lastAttempt: false,
+      eventId: "e1",
+      routeId: "other",
+      code: "x",
+      reason: "y",
+      retriesCancelled: false,
+      lastAttempt: false,
     });
-    expect((await recentDeliveriesHandler(d, { routeId: "stripe" })).locallyRecorded).toHaveLength(0);
+    expect(
+      (await recentDeliveriesHandler(d, { routeId: "stripe" })).locallyRecorded,
+    ).toHaveLength(0);
   });
 
   it("filters before applying the limit, not after", async () => {
@@ -196,18 +293,31 @@ describe("hookdeck_recent_deliveries", () => {
     const d = await deps();
     for (let i = 0; i < 30; i += 1) {
       await d.deadLetter.record({
-        eventId: `noise_${i}`, routeId: "other", code: "x", reason: "y",
-        retriesCancelled: false, lastAttempt: false,
+        eventId: `noise_${i}`,
+        routeId: "other",
+        code: "x",
+        reason: "y",
+        retriesCancelled: false,
+        lastAttempt: false,
       });
     }
     for (let i = 0; i < 3; i += 1) {
       await d.deadLetter.record({
-        eventId: `mine_${i}`, routeId: "stripe", code: "x", reason: "y",
-        retriesCancelled: false, lastAttempt: false,
+        eventId: `mine_${i}`,
+        routeId: "stripe",
+        code: "x",
+        reason: "y",
+        retriesCancelled: false,
+        lastAttempt: false,
       });
     }
-    const result = await recentDeliveriesHandler(d, { routeId: "stripe", limit: 20 });
-    expect(result.locallyRecorded.length + result.unreportedFailures.length).toBe(3);
+    const result = await recentDeliveriesHandler(d, {
+      routeId: "stripe",
+      limit: 20,
+    });
+    expect(
+      result.locallyRecorded.length + result.unreportedFailures.length,
+    ).toBe(3);
   });
 });
 
@@ -217,20 +327,72 @@ describe("hookdeck_inspect_event", () => {
     await d.ledger.begin("evt_1", 1, { routeId: "stripe" });
 
     const result = await inspectEventHandler(d, { eventId: "evt_1" });
-    expect(result.local.ledger).toMatchObject({ eventId: "evt_1", status: "running" });
-    expect(result.hookdeck).toMatchObject({ status: "FAILED", attempts: 3 });
+    expect(result.local.ledger).toMatchObject({
+      eventId: "evt_1",
+      status: "running",
+    });
+    expect(result.hookdeck).toMatchObject({
+      status: "FAILED",
+      attemptCount: 3,
+    });
+  });
+
+  it("returns the attempt history, not just how many there were", async () => {
+    // "Failed 3 times" and "failed with a 500 then a timeout" are different
+    // answers, and only the second tells you what to do next.
+    const d = await deps();
+    const result = await inspectEventHandler(d, { eventId: "evt_1" });
+    expect(result.hookdeck?.attempts).toEqual([
+      {
+        number: 1,
+        status: "FAILED",
+        responseStatus: 500,
+        errorCode: null,
+        trigger: null,
+        at: null,
+      },
+      {
+        number: 2,
+        status: "FAILED",
+        responseStatus: null,
+        errorCode: "TIMEOUT",
+        trigger: null,
+        at: null,
+      },
+    ]);
+  });
+
+  it("still answers when the attempt history is unavailable", async () => {
+    const d = await deps({
+      client: fakeClient({
+        listAttempts: vi.fn(async () => ({
+          ok: false as const,
+          code: "api_error",
+          message: "boom",
+        })),
+      }),
+    });
+    const result = await inspectEventHandler(d, { eventId: "evt_1" });
+    expect(result.hookdeck?.attempts).toBeNull();
+    expect(String(result.hookdeck?.attemptsNote)).toMatch(/boom/);
   });
 
   it("still returns the local view when Hookdeck lookup fails", async () => {
     const d = await deps({
       client: fakeClient({
-        getEvent: vi.fn(async () => ({ ok: false as const, code: "not_found", message: "gone" })),
+        getEvent: vi.fn(async () => ({
+          ok: false as const,
+          code: "not_found",
+          message: "gone",
+        })),
       }),
     });
     await d.ledger.begin("evt_1", 1);
     const result = await inspectEventHandler(d, { eventId: "evt_1" });
     expect(result.local.ledger).toBeTruthy();
-    expect(result.note).toMatch(/lookup failed/i);
+    // A 404 is usually retention, not a typo. Saying so saves an agent several
+    // tool calls spent re-checking an id that was never wrong.
+    expect(String(result.note)).toMatch(/retention/i);
   });
 });
 
@@ -249,7 +411,10 @@ describe("hookdeck_doctor", () => {
       client: fakeClient({
         getConnection: vi.fn(async () => ({
           ok: true as const,
-          data: { id: "web_1", rules: [{ type: "retry", response_status_codes: ["500-599"] }] },
+          data: {
+            id: "web_1",
+            rules: [{ type: "retry", response_status_codes: ["500-599"] }],
+          },
         })),
       }),
     });
@@ -265,7 +430,9 @@ describe("hookdeck_doctor", () => {
   it("flags a missing signing secret", async () => {
     const d = await deps({}, { signingSecret: undefined });
     const result = await doctorHandler(d);
-    expect(result.checks.find((c) => c.name === "signing secret")?.ok).toBe(false);
+    expect(result.checks.find((c) => c.name === "signing secret")?.ok).toBe(
+      false,
+    );
   });
 
   it("flags interrupted work left by a previous process", async () => {
@@ -274,12 +441,22 @@ describe("hookdeck_doctor", () => {
     // only ever asserted that a check existed.
     const io = createFakeStoreIo();
     const { createLedger } = await import("../src/store/ledger.js");
-    const first = await createLedger({ ttlHours: 168, instanceId: "boot-1", stateDir: "/s", io });
+    const first = await createLedger({
+      ttlHours: 168,
+      instanceId: "boot-1",
+      stateDir: "/s",
+      io,
+    });
     await first.begin("evt_crashed", 1, { routeId: "stripe" });
     await first.close();
 
     const d = await deps();
-    d.ledger = await createLedger({ ttlHours: 168, instanceId: "boot-2", stateDir: "/s", io });
+    d.ledger = await createLedger({
+      ttlHours: 168,
+      instanceId: "boot-2",
+      stateDir: "/s",
+      io,
+    });
 
     const result = await doctorHandler(d);
     const check = result.checks.find((c) => c.name === "interrupted work");
@@ -342,7 +519,11 @@ describe("hookdeck_pause", () => {
       schedule,
     );
 
-    expect(result).toMatchObject({ ok: true, paused: true, autoResumeAfterSeconds: 3600 });
+    expect(result).toMatchObject({
+      ok: true,
+      paused: true,
+      autoResumeAfterSeconds: 3600,
+    });
     expect(schedule).toHaveBeenCalledWith(expect.any(Function), 3600_000);
     expect(d.cursors.get("stripe")?.pausedByUs).toBe(true);
   });
@@ -376,7 +557,10 @@ describe("hookdeck_pause", () => {
 
   it("resumes and clears the marker", async () => {
     const d = await deps();
-    await d.cursors.patch("stripe", { connectionId: "web_1", pausedByUs: true });
+    await d.cursors.patch("stripe", {
+      connectionId: "web_1",
+      pausedByUs: true,
+    });
     const result = await pauseHandler(d, { routeId: "stripe", paused: false });
     expect(result).toMatchObject({ ok: true, paused: false });
     expect(d.cursors.get("stripe")?.pausedByUs).toBe(false);
@@ -385,7 +569,11 @@ describe("hookdeck_pause", () => {
   it("clears the marker when the pause call fails", async () => {
     const d = await deps({
       client: fakeClient({
-        pauseConnection: vi.fn(async () => ({ ok: false as const, code: "e", message: "down" })),
+        pauseConnection: vi.fn(async () => ({
+          ok: false as const,
+          code: "e",
+          message: "down",
+        })),
       }),
     });
     await d.cursors.patch("stripe", { connectionId: "web_1" });
@@ -394,7 +582,10 @@ describe("hookdeck_pause", () => {
   });
 
   it("explains when no connection id is known", async () => {
-    const result = await pauseHandler(await deps(), { routeId: "stripe", paused: true });
+    const result = await pauseHandler(await deps(), {
+      routeId: "stripe",
+      paused: true,
+    });
     expect(result.ok).toBe(false);
     expect(result.note).toMatch(/connectionId|setup/i);
   });
@@ -422,7 +613,10 @@ describe("hookdeck_replay", () => {
     // An unscoped retry-everything costs real money.
     const d = await deps();
     await d.cursors.patch("stripe", { connectionId: "web_1" });
-    const result = await replayHandler(d, { routeId: "stripe", sinceMinutes: 60 });
+    const result = await replayHandler(d, {
+      routeId: "stripe",
+      sinceMinutes: 60,
+    });
 
     expect(result).toMatchObject({ ok: false, dryRun: true });
     expect(d.client!.bulkReplayRequests).not.toHaveBeenCalled();
@@ -431,7 +625,11 @@ describe("hookdeck_replay", () => {
   it("executes a filtered replay once confirmed", async () => {
     const d = await deps();
     await d.cursors.patch("stripe", { connectionId: "web_1" });
-    const result = await replayHandler(d, { routeId: "stripe", sinceMinutes: 60, confirm: true });
+    const result = await replayHandler(d, {
+      routeId: "stripe",
+      sinceMinutes: 60,
+      confirm: true,
+    });
 
     expect(result).toMatchObject({ ok: true, mode: "bulk", batchId: "bulk_1" });
     expect(d.client!.bulkReplayRequests).toHaveBeenCalledOnce();
@@ -464,10 +662,14 @@ describe("manifest contracts.tools", () => {
     // all. That is precisely how this shipped broken the first time.
     const { ALL_TOOL_NAMES } = await import("../src/tools/index.js");
     const manifest = JSON.parse(
-      await (await import("node:fs/promises")).readFile("openclaw.plugin.json", "utf8"),
+      await (
+        await import("node:fs/promises")
+      ).readFile("openclaw.plugin.json", "utf8"),
     ) as { contracts?: { tools?: string[] } };
 
-    expect(manifest.contracts?.tools?.slice().sort()).toEqual([...ALL_TOOL_NAMES].sort());
+    expect(manifest.contracts?.tools?.slice().sort()).toEqual(
+      [...ALL_TOOL_NAMES].sort(),
+    );
   });
 });
 
@@ -494,12 +696,18 @@ describe("a disk-backed view does not look like a degraded one", () => {
     expect(status.source).toBe("disk");
 
     const doc = await doctorHandler(d);
-    expect(doc.checks.find((c) => c.name === "ledger persistence")?.detail).toBe("active");
+    expect(
+      doc.checks.find((c) => c.name === "ledger persistence")?.detail,
+    ).toBe("active");
   });
 
   it("reports live-only fields as null rather than zero", async () => {
     // "0 in flight" from a disk view would be a lie; null is a gap.
-    const d = await deps({ source: "disk", inFlight: undefined, transportStatus: undefined });
+    const d = await deps({
+      source: "disk",
+      inFlight: undefined,
+      transportStatus: undefined,
+    });
     const status = await statusHandler(d, {});
     expect(status.inFlight).toBeNull();
     expect(status.transport.listeners).toBeNull();
@@ -513,8 +721,12 @@ describe("we do not reimplement Hookdeck's dead-letter queue", () => {
     // Hookdeck has a record it does not is worse than showing it twice.
     const d = await deps();
     await d.deadLetter.record({
-      eventId: "evt_x", routeId: "stripe", code: "whatever", reason: "y",
-      retriesCancelled: false, lastAttempt: false,
+      eventId: "evt_x",
+      routeId: "stripe",
+      code: "whatever",
+      reason: "y",
+      retriesCancelled: false,
+      lastAttempt: false,
     });
     const result = await recentDeliveriesHandler(d, {});
     expect(result.unreportedFailures.map((r) => r.eventId)).toContain("evt_x");
@@ -524,12 +736,18 @@ describe("we do not reimplement Hookdeck's dead-letter queue", () => {
     // Hookdeck saw a 202 before the run failed, so no Issue will ever open.
     const d = await deps();
     await d.deadLetter.record({
-      eventId: "evt_agent", routeId: "stripe", code: "agent_run_failed",
-      reason: "exhausted", retriesCancelled: false, lastAttempt: true,
+      eventId: "evt_agent",
+      routeId: "stripe",
+      code: "agent_run_failed",
+      reason: "exhausted",
+      retriesCancelled: false,
+      lastAttempt: true,
       hookdeckVisible: false,
     });
     const result = await recentDeliveriesHandler(d, {});
-    expect(result.unreportedFailures[0]).toMatchObject({ ourCode: "agent_run_failed" });
+    expect(result.unreportedFailures[0]).toMatchObject({
+      ourCode: "agent_run_failed",
+    });
     expect(result.locallyRecorded).toHaveLength(0);
   });
 });
@@ -540,7 +758,10 @@ describe("hookdeck_setup and provider verification", () => {
       stripe: {
         source: "stripe",
         dispatch: { mode: "wake", sessionKey: "main" },
-        verification: { provider: "STRIPE", credentials: { webhook_secret: "whsec_provider" } },
+        verification: {
+          provider: "STRIPE",
+          credentials: { webhook_secret: "whsec_provider" },
+        },
       },
     },
   };
@@ -549,9 +770,13 @@ describe("hookdeck_setup and provider verification", () => {
     // PUT /connections is an upsert. Applying a spec with no source auth block
     // would strip verification off a live source, and "applied: true" is the
     // last message anyone would read as a warning.
-    const d = await deps({ resolveVerification: async () => undefined }, verified);
+    const d = await deps(
+      { resolveVerification: async () => undefined },
+      verified,
+    );
     const result = await setupHandler(d, { dryRun: false });
-    const first = result.results?.[0] as { applied: boolean; error: string } | undefined;
+    const first = result.results?.[0] as
+      { applied: boolean; error: string } | undefined;
 
     expect(first).toMatchObject({ applied: false });
     expect(String(first?.error)).toMatch(/no verification/i);
@@ -560,7 +785,9 @@ describe("hookdeck_setup and provider verification", () => {
 
   it("sends the source auth block when they do resolve", async () => {
     const d = await deps(
-      { resolveVerification: async () => ({ webhook_secret: "whsec_provider" }) },
+      {
+        resolveVerification: async () => ({ webhook_secret: "whsec_provider" }),
+      },
       verified,
     );
     await setupHandler(d, { dryRun: false });
@@ -572,10 +799,93 @@ describe("hookdeck_setup and provider verification", () => {
 
   it("does not echo the provider secret back to the model on a dry run", async () => {
     const d = await deps(
-      { resolveVerification: async () => ({ webhook_secret: "whsec_provider" }) },
+      {
+        resolveVerification: async () => ({ webhook_secret: "whsec_provider" }),
+      },
       verified,
     );
     const result = await setupHandler(d, { dryRun: true });
     expect(JSON.stringify(result)).not.toContain("whsec_provider");
+  });
+});
+
+describe("hookdeck_issues — the dead-letter queue's lifecycle", () => {
+  it("lists open issues by default, with a real total rather than the page size", async () => {
+    const d = await deps();
+    const result = await issuesHandler(d, {});
+    expect(result.issues?.[0]).toMatchObject({ id: "iss_1", type: "delivery" });
+    expect(result.total).toBe(1);
+    expect(d.client!.listIssues).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "OPENED" }),
+    );
+  });
+
+  it("says nothing has been given up on, rather than returning a bare empty list", async () => {
+    const d = await deps({
+      client: fakeClient({
+        listIssues: vi.fn(async () => ({ ok: true as const, data: [] })),
+      }),
+    });
+    const result = await issuesHandler(d, {});
+    expect(String(result.summary)).toMatch(/not given up/i);
+  });
+
+  it("maps each verb onto the status the API accepts", async () => {
+    for (const [action, status] of [
+      ["acknowledge", "ACKNOWLEDGED"],
+      ["resolve", "RESOLVED"],
+      ["ignore", "IGNORED"],
+    ] as const) {
+      const d = await deps();
+      await issuesHandler(d, { action, issueId: "iss_1" });
+      expect(d.client!.updateIssue).toHaveBeenCalledWith("iss_1", status);
+    }
+  });
+
+  it("says plainly that resolving replays nothing", async () => {
+    // "Resolved" reads like "fixed". An agent that resolves without replaying
+    // has tidied the dashboard and left the work undone.
+    const d = await deps();
+    const result = await issuesHandler(d, {
+      action: "resolve",
+      issueId: "iss_1",
+    });
+    expect(String(result.note)).toMatch(/no events were replayed/i);
+    expect(String(result.note)).toMatch(/hookdeck_replay/);
+  });
+
+  it("makes dismiss a dry run until confirmed", async () => {
+    const d = await deps();
+    const result = await issuesHandler(d, {
+      action: "dismiss",
+      issueId: "iss_1",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.dryRun).toBe(true);
+    expect(d.client!.dismissIssue).not.toHaveBeenCalled();
+
+    const confirmed = await issuesHandler(d, {
+      action: "dismiss",
+      issueId: "iss_1",
+      confirm: true,
+    });
+    expect(confirmed.ok).toBe(true);
+    expect(d.client!.dismissIssue).toHaveBeenCalledWith("iss_1");
+  });
+
+  it("asks for an id rather than guessing one", async () => {
+    const d = await deps();
+    const result = await issuesHandler(d, { action: "resolve" });
+    expect(result.ok).toBe(false);
+    expect(String(result.note)).toMatch(/issueId/);
+    expect(d.client!.updateIssue).not.toHaveBeenCalled();
+  });
+
+  it("clamps limit rather than passing an unbounded page size through", async () => {
+    const d = await deps();
+    await issuesHandler(d, { limit: 5000 });
+    expect(d.client!.listIssues).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100 }),
+    );
   });
 });

@@ -1,7 +1,13 @@
 import { matchRoute } from "../plugin/config-parse.js";
-import type { HookdeckPluginConfig, RouteConfig } from "../plugin/config-types.js";
+import type {
+  HookdeckPluginConfig,
+  RouteConfig,
+} from "../plugin/config-types.js";
 import { decideAdmission } from "../protocol/admission.js";
-import { parseHookdeckDelivery, type HookdeckDelivery } from "../protocol/delivery.js";
+import {
+  parseHookdeckDelivery,
+  type HookdeckDelivery,
+} from "../protocol/delivery.js";
 import {
   cancelRetries,
   ok,
@@ -33,7 +39,10 @@ export interface Logger {
 export interface HandlerDeps {
   config: HookdeckPluginConfig;
   /** Resolved per request so secret rotation takes effect without a restart. */
-  resolveSigningSecret(routeId: string, route: RouteConfig): Promise<string | undefined>;
+  resolveSigningSecret(
+    routeId: string,
+    route: RouteConfig,
+  ): Promise<string | undefined>;
   dispatcherFor(routeId: string, route: RouteConfig): Dispatcher;
   ledger: Ledger;
   inFlight: InFlightRegistry;
@@ -60,7 +69,9 @@ export interface HandledDelivery {
   delivery?: HookdeckDelivery;
 }
 
-function contentTypeIsJson(headers: Record<string, string | string[] | undefined>): boolean {
+function contentTypeIsJson(
+  headers: Record<string, string | string[] | undefined>,
+): boolean {
   const raw = headers["content-type"];
   const value = Array.isArray(raw) ? raw[0] : raw;
   if (typeof value !== "string") return false;
@@ -111,7 +122,11 @@ async function runPipeline(
 
   // 1. Method.
   if ((req.method ?? "").toUpperCase() !== "POST") {
-    return cancel("bad_method", 405, `expected POST, got ${req.method ?? "(none)"}`);
+    return cancel(
+      "bad_method",
+      405,
+      `expected POST, got ${req.method ?? "(none)"}`,
+    );
   }
 
   // 2. Route match.
@@ -122,13 +137,25 @@ async function runPipeline(
     // retry of this same event succeed. No Retry-After, so the connection's
     // exponential rule spreads the attempts far enough for someone to notice.
     logger.warn(`no enabled route for '${pathname}'`);
-    return { plan: retryable(404, "unknown_route", `no enabled route for '${pathname}'`), extra: {} };
+    return {
+      plan: retryable(
+        404,
+        "unknown_route",
+        `no enabled route for '${pathname}'`,
+      ),
+      extra: {},
+    };
   }
   const { routeId, route } = matched;
 
   // 3. Content type.
   if (!contentTypeIsJson(req.headers)) {
-    return cancel("bad_content_type", 415, "expected application/json", routeId);
+    return cancel(
+      "bad_content_type",
+      415,
+      "expected application/json",
+      routeId,
+    );
   }
 
   // 4. Raw body. Needed as bytes: the signature covers the exact octets sent.
@@ -141,7 +168,11 @@ async function runPipeline(
       return cancel("too_large", 413, "request body exceeds limit", routeId);
     }
     return {
-      plan: retryable(408, "body_read_failed", `could not read body: ${bodyResult.reason}`),
+      plan: retryable(
+        408,
+        "body_read_failed",
+        `could not read body: ${bodyResult.reason}`,
+      ),
       extra: {},
       routeId,
     };
@@ -152,11 +183,17 @@ async function runPipeline(
   //    problem, so it must stay retryable.
   const secret = await deps.resolveSigningSecret(routeId, route);
   if (!secret) {
-    logger.warn(`route '${routeId}': no signing secret resolved; rejecting with 503`);
+    logger.warn(
+      `route '${routeId}': no signing secret resolved; rejecting with 503`,
+    );
     // No Retry-After: a missing secret needs a human, and a fixed short
     // interval would spend the 50-attempt ceiling in under half an hour.
     return {
-      plan: retryable(503, "no_signing_secret", "signing secret is not configured"),
+      plan: retryable(
+        503,
+        "no_signing_secret",
+        "signing secret is not configured",
+      ),
       extra: {},
       routeId,
     };
@@ -170,7 +207,11 @@ async function runPipeline(
     // signature is computed at delivery time rather than stored.
     const message = `no '${config.headerPrefix}-signature' header; is this request coming via Hookdeck, and is the destination's auth set to HOOKDECK_SIGNATURE?`;
     logger.warn(`route '${routeId}': ${message}`);
-    return { plan: retryable(400, "not_hookdeck", message), extra: {}, routeId };
+    return {
+      plan: retryable(400, "not_hookdeck", message),
+      extra: {},
+      routeId,
+    };
   }
 
   // 7. Signature, both slots. The second carries the previous secret during a
@@ -183,14 +224,20 @@ async function runPipeline(
   if (!verification.valid) {
     logger.warn(`route '${routeId}': signature verification failed`);
     return {
-      plan: retryable(401, "invalid_signature", "signature verification failed"),
+      plan: retryable(
+        401,
+        "invalid_signature",
+        "signature verification failed",
+      ),
       extra: {},
       routeId,
       delivery,
     };
   }
   if (verification.matchedSlot === 1) {
-    logger.info(`route '${routeId}': signature matched rotation slot; finish the secret roll`);
+    logger.info(
+      `route '${routeId}': signature matched rotation slot; finish the secret roll`,
+    );
   }
 
   const eventId = delivery.eventId;
@@ -198,30 +245,47 @@ async function runPipeline(
     // Correcting `headerPrefix` makes a retry of this same event parse.
     const message = `no '${config.headerPrefix}-eventid' or 'idempotency-key' header; cannot deduplicate`;
     logger.warn(`route '${routeId}': ${message}`);
-    return { plan: retryable(400, "no_event_id", message), extra: {}, routeId, delivery };
+    return {
+      plan: retryable(400, "no_event_id", message),
+      extra: {},
+      routeId,
+      delivery,
+    };
   }
 
   // 8. Admission control. BEFORE any ledger write.
   if (deps.inFlight.has(eventId)) {
     return {
-      plan: deferFor(503, "in_flight", 5, "this event is already being processed"),
+      plan: deferFor(
+        503,
+        "in_flight",
+        5,
+        "this event is already being processed",
+      ),
       extra: {},
       routeId,
       delivery,
     };
   }
   if (!deps.inFlight.acquire(eventId)) {
-    logger.debug(`route '${routeId}': at max_concurrent (${config.maxConcurrent}), deferring`);
+    logger.debug(
+      `route '${routeId}': at max_concurrent (${config.maxConcurrent}), deferring`,
+    );
     const message = `at capacity (${config.maxConcurrent} concurrent)`;
     // A short Retry-After is right only while "capacity frees up in seconds"
     // holds. The attempt counter makes that observable rather than assumed:
     // once an event has been deferred this many times, capacity plainly is not
     // recovering, so hand pacing back to exponential backoff instead of
     // spending the remaining budget at a fixed interval.
-    const exhaustedDeferrals = (delivery.attemptCount ?? 1) > config.deferAttemptLimit;
+    const exhaustedDeferrals =
+      (delivery.attemptCount ?? 1) > config.deferAttemptLimit;
     return {
       plan: exhaustedDeferrals
-        ? retryable(503, "busy", `${message}; deferred too many times, backing off`)
+        ? retryable(
+            503,
+            "busy",
+            `${message}; deferred too many times, backing off`,
+          )
         : deferFor(503, "busy", config.busyRetryAfterSeconds, message),
       extra: {},
       routeId,
@@ -238,7 +302,12 @@ async function runPipeline(
     if (dispatcher.canAccept?.() === false) {
       logger.debug(`route '${routeId}': dispatcher at capacity, deferring`);
       return {
-        plan: deferFor(503, "busy", config.busyRetryAfterSeconds, "dispatcher is at capacity"),
+        plan: deferFor(
+          503,
+          "busy",
+          config.busyRetryAfterSeconds,
+          "dispatcher is at capacity",
+        ),
         extra: {},
         routeId,
         delivery,
@@ -249,7 +318,9 @@ async function runPipeline(
     const existing = deps.ledger.get(eventId);
     const admission = decideAdmission(existing, delivery.attemptCount);
     if (!admission.admit) {
-      logger.debug(`route '${routeId}': duplicate delivery of ${eventId} (${admission.reason})`);
+      logger.debug(
+        `route '${routeId}': duplicate delivery of ${eventId} (${admission.reason})`,
+      );
       return {
         plan: ok("duplicate", `already handled (${admission.reason})`),
         extra: { duplicate: true, eventId },
@@ -297,7 +368,9 @@ async function runPipeline(
     //     will never accept.
     const filtered = evaluateFilters(route.filters, payload);
     if (!filtered.matched) {
-      logger.debug(`route '${routeId}': filtered out ${eventId} (${filtered.reason})`);
+      logger.debug(
+        `route '${routeId}': filtered out ${eventId} (${filtered.reason})`,
+      );
       return {
         plan: ok("ignored", filtered.reason),
         extra: { ignored: true, eventId },
@@ -320,7 +393,10 @@ async function runPipeline(
 
     return {
       plan: outcome.plan,
-      extra: { eventId, ...(delivery.isLastAutomaticAttempt ? { lastAttempt: true } : {}) },
+      extra: {
+        eventId,
+        ...(delivery.isLastAutomaticAttempt ? { lastAttempt: true } : {}),
+      },
       routeId,
       delivery,
     };
@@ -347,7 +423,10 @@ export async function handleDelivery(
  * Hookdeck Issue, and the Issue is the operator's alert. This record is the
  * local copy an agent can read without an API call.
  */
-async function recordDeadLetter(deps: HandlerDeps, handled: HandledDelivery): Promise<void> {
+async function recordDeadLetter(
+  deps: HandlerDeps,
+  handled: HandledDelivery,
+): Promise<void> {
   const log = deps.deadLetter;
   if (log === undefined) return;
 
@@ -364,7 +443,9 @@ async function recordDeadLetter(deps: HandlerDeps, handled: HandledDelivery): Pr
   try {
     await log.record({
       ...(delivery?.eventId !== undefined ? { eventId: delivery.eventId } : {}),
-      ...(delivery?.requestId !== undefined ? { requestId: delivery.requestId } : {}),
+      ...(delivery?.requestId !== undefined
+        ? { requestId: delivery.requestId }
+        : {}),
       ...(routeId !== undefined ? { routeId } : {}),
       code: plan.code,
       reason: plan.message ?? plan.code,
@@ -377,11 +458,15 @@ async function recordDeadLetter(deps: HandlerDeps, handled: HandledDelivery): Pr
       // plan asked for: with the kill switch off, no cancellation is sent.
       retriesCancelled: cancelled && deps.config.safety.allowRetryCancel,
       lastAttempt: delivery?.isLastAutomaticAttempt ?? false,
-      ...(delivery?.attemptCount !== undefined ? { attemptCount: delivery.attemptCount } : {}),
+      ...(delivery?.attemptCount !== undefined
+        ? { attemptCount: delivery.attemptCount }
+        : {}),
     });
   } catch (err) {
     // Dead-lettering is a diagnostic, never a gate on the response.
-    deps.logger.warn(`could not record dead letter: ${err instanceof Error ? err.message : err}`);
+    deps.logger.warn(
+      `could not record dead letter: ${err instanceof Error ? err.message : err}`,
+    );
   }
 }
 
@@ -401,7 +486,8 @@ export function writePlan(
   res.setHeader("content-type", "application/json; charset=utf-8");
 
   const retryAfterHeader = renderRetryAfterHeader(plan, opts);
-  if (retryAfterHeader !== undefined) res.setHeader("retry-after", retryAfterHeader);
+  if (retryAfterHeader !== undefined)
+    res.setHeader("retry-after", retryAfterHeader);
 
   res.end(planToBody(plan, handled.extra));
 }

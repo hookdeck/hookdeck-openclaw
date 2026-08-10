@@ -67,7 +67,10 @@ describe("createJsonlStore — persistence", () => {
     await first.put({ id: "old", value: 1, createdAt: 0 });
     await first.put({ id: "new", value: 2, createdAt: 10_000 });
 
-    const second = build(io, { isLive: (r, now) => now - r.createdAt < 5_000, now: () => 10_000 });
+    const second = build(io, {
+      isLive: (r, now) => now - r.createdAt < 5_000,
+      now: () => 10_000,
+    });
     await second.load();
     expect(second.get("old")).toBeUndefined();
     expect(second.get("new")).toBeDefined();
@@ -109,7 +112,9 @@ describe("createJsonlStore — compaction", () => {
     // compacted set plus whatever was appended since the last one. Asserting
     // exactly 3 would only pass if a compaction happened to land on the final
     // write.
-    const lines = (io.files.get(PATH) ?? "").split("\n").filter((l) => l.length > 0);
+    const lines = (io.files.get(PATH) ?? "")
+      .split("\n")
+      .filter((l) => l.length > 0);
     expect(lines.length).toBeLessThan(70);
     expect(store.values()).toHaveLength(3);
   });
@@ -170,7 +175,9 @@ describe("createJsonlStore — degradation", () => {
     const io = createFakeStoreIo({ failAfter: 0 });
     const store = build(io);
     await store.load();
-    await expect(store.put({ id: "a", value: 1, createdAt: 0 })).resolves.toBeUndefined();
+    await expect(
+      store.put({ id: "a", value: 1, createdAt: 0 }),
+    ).resolves.toBeUndefined();
   });
 
   it("calls onDegrade exactly once across many failures", async () => {
@@ -179,7 +186,8 @@ describe("createJsonlStore — degradation", () => {
     const store = build(io, { onDegrade });
     await store.load();
 
-    for (let i = 0; i < 5; i += 1) await store.put({ id: `k${i}`, value: i, createdAt: 0 });
+    for (let i = 0; i < 5; i += 1)
+      await store.put({ id: `k${i}`, value: i, createdAt: 0 });
     expect(onDegrade).toHaveBeenCalledTimes(1);
   });
 });
@@ -208,7 +216,8 @@ describe("createJsonlStore — expiry does not leak memory", () => {
     });
     await store.load();
 
-    for (let i = 0; i < 100; i += 1) await store.put({ id: `k${i}`, value: i, createdAt: 0 });
+    for (let i = 0; i < 100; i += 1)
+      await store.put({ id: `k${i}`, value: i, createdAt: 0 });
     expect(store.values()).toHaveLength(100);
 
     clock = 10_000; // everything is now expired
@@ -225,16 +234,17 @@ describe("createJsonlStore — expiry does not leak memory", () => {
     // appends had accumulated. Plant the bloated file directly rather than
     // trying to produce one, which the in-process compactor would prevent.
     const io = createFakeStoreIo();
-    const bloated = Array.from(
-      { length: 500 },
-      (_, i) => JSON.stringify({ k: "same", d: { id: "same", value: i, createdAt: 0 } }),
+    const bloated = Array.from({ length: 500 }, (_, i) =>
+      JSON.stringify({ k: "same", d: { id: "same", value: i, createdAt: 0 } }),
     ).join("\n");
     io.files.set(PATH, `${bloated}\n`);
 
     const store = build(io);
     await store.load();
 
-    const after = (io.files.get(PATH) ?? "").split("\n").filter((l) => l).length;
+    const after = (io.files.get(PATH) ?? "")
+      .split("\n")
+      .filter((l) => l).length;
     expect(after).toBe(1);
     expect(store.get("same")?.value).toBe(499);
     expect(store.stats().compactions).toBe(1);
@@ -251,10 +261,12 @@ describe("createJsonlStore — expiry in modes where compaction never runs", () 
       now: () => clock,
     });
     await store.load();
-    for (let i = 0; i < 300; i += 1) await store.put({ id: `k${i}`, value: i, createdAt: clock });
+    for (let i = 0; i < 300; i += 1)
+      await store.put({ id: `k${i}`, value: i, createdAt: clock });
 
     clock = 10_000;
-    for (let i = 0; i < 300; i += 1) await store.put({ id: `n${i}`, value: i, createdAt: clock });
+    for (let i = 0; i < 300; i += 1)
+      await store.put({ id: `n${i}`, value: i, createdAt: clock });
 
     // The first 300 are long expired and must not still be held.
     expect(store.get("k0")).toBeUndefined();
@@ -264,13 +276,18 @@ describe("createJsonlStore — expiry in modes where compaction never runs", () 
   it("evicts expired entries after persistence has degraded", async () => {
     let clock = 0;
     const io = createFakeStoreIo({ failAfter: 0 });
-    const store = build(io, { isLive: (r, n) => n - r.createdAt < 1_000, now: () => clock });
+    const store = build(io, {
+      isLive: (r, n) => n - r.createdAt < 1_000,
+      now: () => clock,
+    });
     await store.load();
-    for (let i = 0; i < 300; i += 1) await store.put({ id: `k${i}`, value: i, createdAt: clock });
+    for (let i = 0; i < 300; i += 1)
+      await store.put({ id: `k${i}`, value: i, createdAt: clock });
     expect(store.stats().persistence).toBe("disabled");
 
     clock = 10_000;
-    for (let i = 0; i < 300; i += 1) await store.put({ id: `n${i}`, value: i, createdAt: clock });
+    for (let i = 0; i < 300; i += 1)
+      await store.put({ id: `n${i}`, value: i, createdAt: clock });
 
     expect(store.get("k0")).toBeUndefined();
   });

@@ -1,4 +1,7 @@
-import type { BoundTaskFlowRuntime, SubagentRuntime } from "../plugin/host-api.js";
+import type {
+  BoundTaskFlowRuntime,
+  SubagentRuntime,
+} from "../plugin/host-api.js";
 import { TRUST_HINT } from "../protocol/template.js";
 import type { AgentRunner } from "./agent.js";
 
@@ -30,7 +33,9 @@ export interface TaskFlowRunnerOptions {
   bind(sessionKey: string): BoundTaskFlowRuntime;
 }
 
-export function createTaskFlowRunner(options: TaskFlowRunnerOptions): AgentRunner {
+export function createTaskFlowRunner(
+  options: TaskFlowRunnerOptions,
+): AgentRunner {
   return {
     async start({ sessionKey, prompt, eventId, routeId }) {
       const flows = options.bind(sessionKey);
@@ -40,10 +45,18 @@ export function createTaskFlowRunner(options: TaskFlowRunnerOptions): AgentRunne
         goal: `Webhook ${routeId} (${eventId})`,
       });
       if (flow === null) {
-        return { ok: false, retryable: true, message: "flow could not be persisted" };
+        return {
+          ok: false,
+          retryable: true,
+          message: "flow could not be persisted",
+        };
       }
 
-      const task = flows.runTask({ flowId: flow.flowId, runtime: "subagent", task: prompt });
+      const task = flows.runTask({
+        flowId: flow.flowId,
+        runtime: "subagent",
+        task: prompt,
+      });
       if (!task.created) {
         return {
           ok: false,
@@ -68,7 +81,9 @@ export interface SubagentRunnerOptions {
   lane?: string;
 }
 
-export function createSubagentRunner(options: SubagentRunnerOptions): AgentRunner {
+export function createSubagentRunner(
+  options: SubagentRunnerOptions,
+): AgentRunner {
   return {
     async start({ sessionKey, prompt, eventId }) {
       try {

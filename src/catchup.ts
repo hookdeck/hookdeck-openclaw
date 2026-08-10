@@ -28,7 +28,9 @@ export interface CatchUpQueryParams {
   sourceId?: string;
 }
 
-export function buildCatchUpQuery(params: CatchUpQueryParams): Record<string, unknown> {
+export function buildCatchUpQuery(
+  params: CatchUpQueryParams,
+): Record<string, unknown> {
   return {
     // Requests that produced no CLI event and at least one ignored event: the
     // signature of "arrived while nothing was listening".
@@ -36,7 +38,9 @@ export function buildCatchUpQuery(params: CatchUpQueryParams): Record<string, un
     ignored_count: { gte: 1 },
     ingested_at: {
       gte: new Date(params.sinceMs).toISOString(),
-      ...(params.untilMs !== undefined ? { lte: new Date(params.untilMs).toISOString() } : {}),
+      ...(params.untilMs !== undefined
+        ? { lte: new Date(params.untilMs).toISOString() }
+        : {}),
     },
     ...(params.sourceId !== undefined ? { source_id: params.sourceId } : {}),
   };
@@ -61,7 +65,9 @@ export type CatchUpResult =
 
 export const DEFAULT_MIN_GAP_MS = 30_000;
 
-export async function runCatchUp(options: CatchUpOptions): Promise<CatchUpResult> {
+export async function runCatchUp(
+  options: CatchUpOptions,
+): Promise<CatchUpResult> {
   const now = options.now ?? Date.now;
   const until = options.untilMs ?? now();
   const gap = until - options.sinceMs;

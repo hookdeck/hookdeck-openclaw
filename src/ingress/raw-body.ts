@@ -9,7 +9,9 @@
  * read it ourselves and keep the Buffer.
  */
 
-export interface RawBodySource extends AsyncIterable<Buffer | Uint8Array | string> {
+export interface RawBodySource extends AsyncIterable<
+  Buffer | Uint8Array | string
+> {
   headers?: Record<string, string | string[] | undefined>;
 }
 
@@ -36,12 +38,16 @@ export async function readRawBody(
   const declaredValue = Array.isArray(declared) ? declared[0] : declared;
   if (typeof declaredValue === "string") {
     const length = Number.parseInt(declaredValue, 10);
-    if (Number.isFinite(length) && length > maxBytes) return { ok: false, reason: "too_large" };
+    if (Number.isFinite(length) && length > maxBytes)
+      return { ok: false, reason: "too_large" };
   }
 
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<ReadRawBodyResult>((resolve) => {
-    timer = setTimeout(() => resolve({ ok: false, reason: "timeout" }), timeoutMs);
+    timer = setTimeout(
+      () => resolve({ ok: false, reason: "timeout" }),
+      timeoutMs,
+    );
     // Do not hold the event loop open for a body that never arrives.
     timer.unref?.();
   });

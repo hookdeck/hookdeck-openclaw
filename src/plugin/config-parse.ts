@@ -30,7 +30,10 @@ const wakeDispatchSchema = z.object({
 const filterSchema = z.object({
   path: z.string().min(1),
   equals: z.union([z.string(), z.number(), z.boolean()]).optional(),
-  in: z.array(z.union([z.string(), z.number(), z.boolean()])).min(1).optional(),
+  in: z
+    .array(z.union([z.string(), z.number(), z.boolean()]))
+    .min(1)
+    .optional(),
   exists: z.boolean().optional(),
 });
 
@@ -78,11 +81,18 @@ const configSchema = z.object({
   headerPrefix: z.string().min(1).default(DEFAULT_HEADER_PREFIX),
   signingSecret: secretInputSchema.optional(),
   apiKey: secretInputSchema.optional(),
-  tools: z.object({ allowMutations: z.boolean().default(true) }).default({ allowMutations: true }),
+  tools: z
+    .object({ allowMutations: z.boolean().default(true) })
+    .default({ allowMutations: true }),
   storage: z
     .object({
       enabled: z.boolean().default(true),
-      deadLetterMaxEntries: z.number().int().positive().max(100_000).default(500),
+      deadLetterMaxEntries: z
+        .number()
+        .int()
+        .positive()
+        .max(100_000)
+        .default(500),
     })
     .default({ enabled: true, deadLetterMaxEntries: 500 }),
   recovery: z
@@ -99,7 +109,12 @@ const configSchema = z.object({
       allowUnsupportedVersion: z.boolean().default(false),
       publicUrl: z.string().url().optional(),
     })
-    .default({ mode: "none", port: 18789, binaryPath: "hookdeck", allowUnsupportedVersion: false }),
+    .default({
+      mode: "none",
+      port: 18789,
+      binaryPath: "hookdeck",
+      allowUnsupportedVersion: false,
+    }),
   provisioning: z
     .object({
       enabled: z.boolean().default(false),
@@ -125,9 +140,17 @@ const configSchema = z.object({
   maxConcurrent: z.number().int().positive().max(1000).default(4),
   busyRetryAfterSeconds: z.number().int().positive().max(3600).default(10),
   deferAttemptLimit: z.number().int().positive().max(50).default(5),
-  dedupe: z.object({ ttlHours: z.number().positive().max(24 * 30).default(24 * 7) }).default({
-    ttlHours: 24 * 7,
-  }),
+  dedupe: z
+    .object({
+      ttlHours: z
+        .number()
+        .positive()
+        .max(24 * 30)
+        .default(24 * 7),
+    })
+    .default({
+      ttlHours: 24 * 7,
+    }),
   safety: z
     .object({ allowRetryCancel: z.boolean().default(false) })
     .default({ allowRetryCancel: false }),
@@ -166,7 +189,8 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
   if (basePath === "") {
     problems.push({
       path: "ingress.basePath",
-      message: "basePath may not be '/' — it would capture every Gateway request.",
+      message:
+        "basePath may not be '/' — it would capture every Gateway request.",
     });
   }
 
@@ -194,7 +218,10 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     }
     seenPaths.set(fullPath, routeId);
 
-    if (route.signingSecret === undefined && value.signingSecret === undefined) {
+    if (
+      route.signingSecret === undefined &&
+      value.signingSecret === undefined
+    ) {
       // Not fatal at parse time — the operator may be running ingress-only
       // while provisioning. It becomes a 503 per request, which keeps the
       // event alive in Hookdeck until they fix it.
@@ -206,11 +233,18 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     }
 
     if (!route.enabled) {
-      warnings.push({ path: `routes.${routeId}`, message: "route is disabled" });
+      warnings.push({
+        path: `routes.${routeId}`,
+        message: "route is disabled",
+      });
     }
 
     for (const [index, filter] of (route.filters ?? []).entries()) {
-      if (filter.equals === undefined && filter.in === undefined && filter.exists === undefined) {
+      if (
+        filter.equals === undefined &&
+        filter.in === undefined &&
+        filter.exists === undefined
+      ) {
         problems.push({
           path: `routes.${routeId}.filters.${index}`,
           message:
@@ -255,10 +289,16 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       enabled: route.enabled,
       path: routePath,
       source: route.source,
-      ...(route.signingSecret !== undefined ? { signingSecret: route.signingSecret } : {}),
+      ...(route.signingSecret !== undefined
+        ? { signingSecret: route.signingSecret }
+        : {}),
       dispatch: route.dispatch,
-      ...(route.connectionId !== undefined ? { connectionId: route.connectionId } : {}),
-      ...(route.verification !== undefined ? { verification: route.verification } : {}),
+      ...(route.connectionId !== undefined
+        ? { connectionId: route.connectionId }
+        : {}),
+      ...(route.verification !== undefined
+        ? { verification: route.verification }
+        : {}),
       ...(route.filters !== undefined ? { filters: route.filters } : {}),
     };
   }
@@ -287,10 +327,14 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     });
   }
 
-  if (value.transport.mode === "http" && value.transport.publicUrl === undefined) {
+  if (
+    value.transport.mode === "http" &&
+    value.transport.publicUrl === undefined
+  ) {
     problems.push({
       path: "transport.publicUrl",
-      message: "http transport requires transport.publicUrl so the destination can be provisioned",
+      message:
+        "http transport requires transport.publicUrl so the destination can be provisioned",
     });
   }
 
@@ -304,7 +348,9 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
 
   const config: HookdeckPluginConfig = {
     headerPrefix: value.headerPrefix.replace(/-+$/, "").toLowerCase(),
-    ...(value.signingSecret !== undefined ? { signingSecret: value.signingSecret } : {}),
+    ...(value.signingSecret !== undefined
+      ? { signingSecret: value.signingSecret }
+      : {}),
     ...(value.apiKey !== undefined ? { apiKey: value.apiKey } : {}),
     ingress: { basePath },
     maxConcurrent: value.maxConcurrent,
@@ -316,13 +362,18 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       enabled: value.storage.enabled,
       deadLetterMaxEntries: value.storage.deadLetterMaxEntries,
     },
-    recovery: { enabled: value.recovery.enabled, maxEvents: value.recovery.maxEvents },
+    recovery: {
+      enabled: value.recovery.enabled,
+      maxEvents: value.recovery.maxEvents,
+    },
     transport: {
       mode: value.transport.mode,
       port: value.transport.port,
       binaryPath: value.transport.binaryPath,
       allowUnsupportedVersion: value.transport.allowUnsupportedVersion,
-      ...(value.transport.publicUrl !== undefined ? { publicUrl: value.transport.publicUrl } : {}),
+      ...(value.transport.publicUrl !== undefined
+        ? { publicUrl: value.transport.publicUrl }
+        : {}),
     },
     provisioning: {
       enabled: value.provisioning.enabled,
@@ -331,8 +382,14 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
         ? { dedupeWindowMs: value.provisioning.dedupeWindowMs }
         : {}),
     },
-    pause: { onShutdown: value.pause.onShutdown, shutdownTimeoutMs: value.pause.shutdownTimeoutMs },
-    catchUp: { enabled: value.catchUp.enabled, minGapSeconds: value.catchUp.minGapSeconds },
+    pause: {
+      onShutdown: value.pause.onShutdown,
+      shutdownTimeoutMs: value.pause.shutdownTimeoutMs,
+    },
+    catchUp: {
+      enabled: value.catchUp.enabled,
+      minGapSeconds: value.catchUp.minGapSeconds,
+    },
     safety: { allowRetryCancel: value.safety.allowRetryCancel },
     routes,
   };
@@ -369,5 +426,7 @@ export function matchRoute(
     }
   }
 
-  return best === undefined ? undefined : { routeId: best.routeId, route: best.route };
+  return best === undefined
+    ? undefined
+    : { routeId: best.routeId, route: best.route };
 }

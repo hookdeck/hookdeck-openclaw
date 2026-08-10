@@ -3,9 +3,16 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
-import type { DispatchContext, DispatchOutcome } from "../src/dispatch/types.js";
+import type {
+  DispatchContext,
+  DispatchOutcome,
+} from "../src/dispatch/types.js";
 import { ok as okPlan } from "../src/protocol/outcome.js";
-import { handleDelivery, writePlan, type HandlerDeps } from "../src/ingress/handler.js";
+import {
+  handleDelivery,
+  writePlan,
+  type HandlerDeps,
+} from "../src/ingress/handler.js";
 import { computeHookdeckSignature } from "../src/protocol/signature.js";
 import { createInFlightRegistry } from "../src/store/in-flight.js";
 import { createMemoryLedger } from "../src/store/ledger.js";
@@ -25,22 +32,32 @@ const SECRET = "whsec_test";
 const parsed = parseHookdeckConfig({
   signingSecret: SECRET,
   maxConcurrent: 2,
-  routes: { stripe: { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" } } },
+  routes: {
+    stripe: {
+      source: "stripe",
+      dispatch: { mode: "wake", sessionKey: "main" },
+    },
+  },
 });
 if (!parsed.ok) throw new Error("bad fixture config");
 const config = parsed.config;
 
 let server: Server;
 let baseUrl: string;
-const dispatch = vi.fn<(ctx: DispatchContext) => Promise<DispatchOutcome>>(async () => ({
-  settle: "succeeded",
-  plan: okPlan("dispatched"),
-}));
+const dispatch = vi.fn<(ctx: DispatchContext) => Promise<DispatchOutcome>>(
+  async () => ({
+    settle: "succeeded",
+    plan: okPlan("dispatched"),
+  }),
+);
 
 beforeAll(async () => {
   const deps: HandlerDeps = {
     config,
-    ledger: createMemoryLedger({ ttlHours: config.dedupe.ttlHours, instanceId: "test" }),
+    ledger: createMemoryLedger({
+      ttlHours: config.dedupe.ttlHours,
+      instanceId: "test",
+    }),
     inFlight: createInFlightRegistry(config.maxConcurrent),
     logger: { debug: () => {}, info: () => {}, warn: () => {} },
     dispatcherFor: () => ({ dispatch }),
@@ -54,7 +71,9 @@ beforeAll(async () => {
       headers: req.headers,
       stream: req,
     }).then((handled) => {
-      writePlan(res, handled, { allowRetryCancel: config.safety.allowRetryCancel });
+      writePlan(res, handled, {
+        allowRetryCancel: config.safety.allowRetryCancel,
+      });
     });
   });
 
@@ -76,7 +95,10 @@ async function post(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-hookdeck-signature": computeHookdeckSignature(Buffer.from(body, "utf8"), SECRET),
+      "x-hookdeck-signature": computeHookdeckSignature(
+        Buffer.from(body, "utf8"),
+        SECRET,
+      ),
       "x-hookdeck-eventid": "evt_http_1",
       "x-hookdeck-attempt-count": "1",
       "x-hookdeck-source-name": "stripe",
@@ -84,12 +106,18 @@ async function post(
     },
     body,
   });
-  return { status: response.status, retryAfter: response.headers.get("retry-after"), body: await response.json() };
+  return {
+    status: response.status,
+    retryAfter: response.headers.get("retry-after"),
+    body: await response.json(),
+  };
 }
 
 describe("over a real HTTP socket", () => {
   it("verifies a signed delivery and dispatches", async () => {
-    const result = await post('{"type":"invoice.paid"}', { "x-hookdeck-eventid": "evt_a" });
+    const result = await post('{"type":"invoice.paid"}', {
+      "x-hookdeck-eventid": "evt_a",
+    });
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ ok: true, code: "dispatched" });
   });
@@ -112,7 +140,10 @@ describe("over a real HTTP socket", () => {
     const body = '{"type":"invoice.paid"}';
     const result = await post(body, {
       "x-hookdeck-eventid": "evt_tampered",
-      "x-hookdeck-signature": computeHookdeckSignature(Buffer.from("different", "utf8"), SECRET),
+      "x-hookdeck-signature": computeHookdeckSignature(
+        Buffer.from("different", "utf8"),
+        SECRET,
+      ),
     });
     expect(result.status).toBe(401);
   });
@@ -133,7 +164,10 @@ describe("over a real HTTP socket", () => {
   });
 
   it("admits a redelivery carrying a higher attempt count", async () => {
-    await post('{"n":1}', { "x-hookdeck-eventid": "evt_retry", "x-hookdeck-attempt-count": "1" });
+    await post('{"n":1}', {
+      "x-hookdeck-eventid": "evt_retry",
+      "x-hookdeck-attempt-count": "1",
+    });
     const calls = dispatch.mock.calls.length;
     const second = await post('{"n":1}', {
       "x-hookdeck-eventid": "evt_retry",
@@ -144,7 +178,11 @@ describe("over a real HTTP socket", () => {
   });
 
   it("returns 404 for a path with no route", async () => {
-    const result = await post("{}", { "x-hookdeck-eventid": "evt_404" }, "/hookdeck/unknown");
+    const result = await post(
+      "{}",
+      { "x-hookdeck-eventid": "evt_404" },
+      "/hookdeck/unknown",
+    );
     expect(result.status).toBe(404);
   });
 

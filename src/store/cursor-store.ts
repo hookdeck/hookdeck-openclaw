@@ -1,5 +1,9 @@
 import { join } from "node:path";
-import { createJsonlStore, type JsonlStore, type PersistenceState } from "./jsonl-store.js";
+import {
+  createJsonlStore,
+  type JsonlStore,
+  type PersistenceState,
+} from "./jsonl-store.js";
 import type { StoreIo } from "./store-io.js";
 
 /**
@@ -28,7 +32,10 @@ export interface CursorRecord {
 
 export interface CursorStore {
   get(routeId: string): CursorRecord | undefined;
-  patch(routeId: string, patch: Partial<Omit<CursorRecord, "key" | "routeId">>): Promise<void>;
+  patch(
+    routeId: string,
+    patch: Partial<Omit<CursorRecord, "key" | "routeId">>,
+  ): Promise<void>;
   /** Removes a field outright, rather than writing an undefined over it. */
   clear(routeId: string, field: keyof CursorRecord): Promise<void>;
   all(): CursorRecord[];
@@ -47,7 +54,9 @@ export interface CursorStoreOptions {
   now?(): number;
 }
 
-export async function createCursorStore(options: CursorStoreOptions = {}): Promise<CursorStore> {
+export async function createCursorStore(
+  options: CursorStoreOptions = {},
+): Promise<CursorStore> {
   const now = options.now ?? Date.now;
   const path =
     options.stateDir !== undefined && options.io !== undefined
@@ -61,7 +70,9 @@ export async function createCursorStore(options: CursorStoreOptions = {}): Promi
     // Cursors never expire: a disconnect breadcrumb from a long outage is
     // exactly the one you need, and there are only ever a handful of rows.
     isLive: () => true,
-    ...(options.onDegrade !== undefined ? { onDegrade: options.onDegrade } : {}),
+    ...(options.onDegrade !== undefined
+      ? { onDegrade: options.onDegrade }
+      : {}),
     ...(options.readOnly === true ? { readOnly: true } : {}),
     now,
   });

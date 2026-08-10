@@ -125,19 +125,39 @@ describe("buildListenArgs", () => {
 
 describe("createBackoff", () => {
   it("grows exponentially up to the cap", () => {
-    const b = createBackoff({ initialDelayMs: 100, factor: 2, maxDelayMs: 800, jitter: 0, random: () => 0.5 });
-    expect([b.next(), b.next(), b.next(), b.next(), b.next()]).toEqual([100, 200, 400, 800, 800]);
+    const b = createBackoff({
+      initialDelayMs: 100,
+      factor: 2,
+      maxDelayMs: 800,
+      jitter: 0,
+      random: () => 0.5,
+    });
+    expect([b.next(), b.next(), b.next(), b.next(), b.next()]).toEqual([
+      100, 200, 400, 800, 800,
+    ]);
   });
 
   it("applies symmetric jitter", () => {
-    const low = createBackoff({ initialDelayMs: 1000, jitter: 0.2, random: () => 0 });
-    const high = createBackoff({ initialDelayMs: 1000, jitter: 0.2, random: () => 1 });
+    const low = createBackoff({
+      initialDelayMs: 1000,
+      jitter: 0.2,
+      random: () => 0,
+    });
+    const high = createBackoff({
+      initialDelayMs: 1000,
+      jitter: 0.2,
+      random: () => 1,
+    });
     expect(low.next()).toBe(800);
     expect(high.next()).toBe(1200);
   });
 
   it("resets after sustained health", () => {
-    const b = createBackoff({ initialDelayMs: 100, jitter: 0, healthyResetMs: 5_000 });
+    const b = createBackoff({
+      initialDelayMs: 100,
+      jitter: 0,
+      healthyResetMs: 5_000,
+    });
     b.next();
     b.next();
     b.markHealthy(6_000);
@@ -145,14 +165,22 @@ describe("createBackoff", () => {
   });
 
   it("does not reset on a short-lived connection", () => {
-    const b = createBackoff({ initialDelayMs: 100, jitter: 0, healthyResetMs: 5_000 });
+    const b = createBackoff({
+      initialDelayMs: 100,
+      jitter: 0,
+      healthyResetMs: 5_000,
+    });
     b.next();
     b.markHealthy(100);
     expect(b.failures).toBe(1);
   });
 
   it("gives up after the configured consecutive failures", () => {
-    const b = createBackoff({ initialDelayMs: 1, jitter: 0, maxConsecutiveFailures: 2 });
+    const b = createBackoff({
+      initialDelayMs: 1,
+      jitter: 0,
+      maxConsecutiveFailures: 2,
+    });
     expect(b.next()).toBeDefined();
     expect(b.next()).toBeDefined();
     expect(b.next()).toBeUndefined();
@@ -163,7 +191,11 @@ describe("createBackoff", () => {
 function fakeChild() {
   const lineCbs: ((l: string) => void)[] = [];
   const exitCbs: ((c: number | null, s: string | null) => void)[] = [];
-  const handle: ChildHandle & { killed: string[]; emit(l: string): void; exit(c?: number): void } = {
+  const handle: ChildHandle & {
+    killed: string[];
+    emit(l: string): void;
+    exit(c?: number): void;
+  } = {
     killed: [],
     kill: (signal) => handle.killed.push(signal ?? "SIGTERM"),
     onLine: (cb) => lineCbs.push(cb),
@@ -205,9 +237,13 @@ describe("createCliListener", () => {
 
   it("passes the api key via env, never argv", () => {
     const child = fakeChild();
-    const spawn = vi.fn<(c: string, a: readonly string[], e: Record<string, string>) => typeof child>(
-      () => child,
-    );
+    const spawn = vi.fn<
+      (
+        c: string,
+        a: readonly string[],
+        e: Record<string, string>,
+      ) => typeof child
+    >(() => child);
     const timers = manualTimers();
     createCliListener(options, {
       spawn,
@@ -277,7 +313,10 @@ describe("createCliListener", () => {
   it("gives up rather than restarting forever, leaving ingress serving", () => {
     const timers = manualTimers();
     const listener = createCliListener(
-      { ...options, backoff: { initialDelayMs: 1, jitter: 0, maxConsecutiveFailures: 1 } },
+      {
+        ...options,
+        backoff: { initialDelayMs: 1, jitter: 0, maxConsecutiveFailures: 1 },
+      },
       {
         spawn: () => {
           const c = fakeChild();

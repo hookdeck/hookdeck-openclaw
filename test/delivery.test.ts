@@ -32,9 +32,10 @@ describe("parseHookdeckDelivery", () => {
 
   it("reads the event id from '-eventid', with no separator before 'id'", () => {
     // Getting this wrong silently disables deduplication, so it gets its own test.
-    expect(parseHookdeckDelivery({ ...BASE, "x-hookdeck-event-id": "wrong" }).eventId).toBe(
-      "evt_abc",
-    );
+    expect(
+      parseHookdeckDelivery({ ...BASE, "x-hookdeck-event-id": "wrong" })
+        .eventId,
+    ).toBe("evt_abc");
   });
 
   it("falls back to the unprefixed Idempotency-Key when the prefix is misconfigured", () => {
@@ -46,7 +47,10 @@ describe("parseHookdeckDelivery", () => {
   });
 
   it("prefers the prefixed event id over Idempotency-Key", () => {
-    const d = parseHookdeckDelivery({ ...BASE, "idempotency-key": "evt_other" });
+    const d = parseHookdeckDelivery({
+      ...BASE,
+      "idempotency-key": "evt_other",
+    });
     expect(d.eventId).toBe("evt_abc");
   });
 
@@ -60,13 +64,18 @@ describe("parseHookdeckDelivery", () => {
         },
         "x-acme",
       );
-      expect(d).toMatchObject({ eventId: "evt_1", attemptCount: 2, looksLikeHookdeck: true });
+      expect(d).toMatchObject({
+        eventId: "evt_1",
+        attemptCount: 2,
+        looksLikeHookdeck: true,
+      });
     });
 
     it("tolerates a trailing dash in the configured prefix", () => {
-      expect(parseHookdeckDelivery({ "x-acme-signature": "s" }, "x-acme-").looksLikeHookdeck).toBe(
-        true,
-      );
+      expect(
+        parseHookdeckDelivery({ "x-acme-signature": "s" }, "x-acme-")
+          .looksLikeHookdeck,
+      ).toBe(true);
     });
 
     it("does not see default-prefixed headers when a custom prefix is set", () => {
@@ -103,24 +112,38 @@ describe("parseHookdeckDelivery", () => {
   });
 
   describe("attempt trigger", () => {
-    for (const trigger of ["INITIAL", "AUTOMATIC", "MANUAL", "BULK_RETRY", "UNPAUSE"]) {
+    for (const trigger of [
+      "INITIAL",
+      "AUTOMATIC",
+      "MANUAL",
+      "BULK_RETRY",
+      "UNPAUSE",
+    ]) {
       it(`recognises ${trigger}`, () => {
         expect(
-          parseHookdeckDelivery({ ...BASE, "x-hookdeck-attempt-trigger": trigger }).attemptTrigger,
+          parseHookdeckDelivery({
+            ...BASE,
+            "x-hookdeck-attempt-trigger": trigger,
+          }).attemptTrigger,
         ).toBe(trigger);
       });
     }
 
     it("normalises case", () => {
       expect(
-        parseHookdeckDelivery({ ...BASE, "x-hookdeck-attempt-trigger": "manual" }).attemptTrigger,
+        parseHookdeckDelivery({
+          ...BASE,
+          "x-hookdeck-attempt-trigger": "manual",
+        }).attemptTrigger,
       ).toBe("MANUAL");
     });
 
     it("maps an unknown value to UNKNOWN rather than throwing", () => {
       expect(
-        parseHookdeckDelivery({ ...BASE, "x-hookdeck-attempt-trigger": "TELEPORT" })
-          .attemptTrigger,
+        parseHookdeckDelivery({
+          ...BASE,
+          "x-hookdeck-attempt-trigger": "TELEPORT",
+        }).attemptTrigger,
       ).toBe("UNKNOWN");
     });
 
@@ -131,27 +154,38 @@ describe("parseHookdeckDelivery", () => {
   });
 
   it("captures the rotation signature slot", () => {
-    const d = parseHookdeckDelivery({ ...BASE, "x-hookdeck-signature-2": "sig-previous" });
+    const d = parseHookdeckDelivery({
+      ...BASE,
+      "x-hookdeck-signature-2": "sig-previous",
+    });
     expect(d.signatures).toEqual(["sig-primary", "sig-previous"]);
   });
 
   it("reports looksLikeHookdeck false with no signature headers", () => {
-    expect(parseHookdeckDelivery({ "content-type": "application/json" }).looksLikeHookdeck).toBe(
-      false,
-    );
+    expect(
+      parseHookdeckDelivery({ "content-type": "application/json" })
+        .looksLikeHookdeck,
+    ).toBe(false);
   });
 
   it("handles array-valued headers", () => {
-    expect(parseHookdeckDelivery({ "x-hookdeck-signature": ["a", "b"] }).signatures[0]).toBe("a");
+    expect(
+      parseHookdeckDelivery({ "x-hookdeck-signature": ["a", "b"] })
+        .signatures[0],
+    ).toBe("a");
   });
 
   it("ignores a non-numeric attempt count rather than producing NaN", () => {
     expect(
-      parseHookdeckDelivery({ ...BASE, "x-hookdeck-attempt-count": "many" }).attemptCount,
+      parseHookdeckDelivery({ ...BASE, "x-hookdeck-attempt-count": "many" })
+        .attemptCount,
     ).toBeUndefined();
   });
 
   it("reads verified: false", () => {
-    expect(parseHookdeckDelivery({ ...BASE, "x-hookdeck-verified": "false" }).verified).toBe(false);
+    expect(
+      parseHookdeckDelivery({ ...BASE, "x-hookdeck-verified": "false" })
+        .verified,
+    ).toBe(false);
   });
 });

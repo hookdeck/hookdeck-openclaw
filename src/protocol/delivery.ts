@@ -10,12 +10,7 @@
 export const DEFAULT_HEADER_PREFIX = "x-hookdeck";
 
 export type AttemptTrigger =
-  | "INITIAL"
-  | "AUTOMATIC"
-  | "MANUAL"
-  | "BULK_RETRY"
-  | "UNPAUSE"
-  | "UNKNOWN";
+  "INITIAL" | "AUTOMATIC" | "MANUAL" | "BULK_RETRY" | "UNPAUSE" | "UNKNOWN";
 
 export interface HookdeckDelivery {
   /** Stable across every attempt of one event. Primary identity. */
@@ -99,6 +94,7 @@ export function parseHookdeckDelivery(
     connectionName: h("connection-name"),
     verified: verifiedRaw === undefined ? undefined : verifiedRaw === "true",
     signatures: [primarySignature, rotationSignature],
-    looksLikeHookdeck: primarySignature !== undefined || rotationSignature !== undefined,
+    looksLikeHookdeck:
+      primarySignature !== undefined || rotationSignature !== undefined,
   };
 }

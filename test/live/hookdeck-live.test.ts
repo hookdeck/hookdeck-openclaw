@@ -22,7 +22,8 @@ import {
  */
 
 function readKey(): string | undefined {
-  if (process.env.HOOKDECK_TEST_API_KEY) return process.env.HOOKDECK_TEST_API_KEY;
+  if (process.env.HOOKDECK_TEST_API_KEY)
+    return process.env.HOOKDECK_TEST_API_KEY;
   try {
     const contents = readFileSync(join(process.cwd(), ".env.local"), "utf8");
     const match = /^HOOKDECK_TEST_API_KEY=(.+)$/m.exec(contents);
@@ -42,10 +43,14 @@ const created: string[] = [];
 run("live Hookdeck API", () => {
   const client = createHookdeckClient({
     apiKey: apiKey!,
-    ...(process.env.HOOKDECK_API_BASE ? { baseUrl: process.env.HOOKDECK_API_BASE } : {}),
+    ...(process.env.HOOKDECK_API_BASE
+      ? { baseUrl: process.env.HOOKDECK_API_BASE }
+      : {}),
   });
 
-  const spec = (overrides: Partial<ProvisionRouteSpec> = {}): ProvisionRouteSpec => ({
+  const spec = (
+    overrides: Partial<ProvisionRouteSpec> = {},
+  ): ProvisionRouteSpec => ({
     routeId: `${runId}-stripe`,
     source: `openclaw-${runId}`,
     path: `/hookdeck/${runId}`,

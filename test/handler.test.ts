@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
 import type { HookdeckPluginConfig } from "../src/plugin/config-types.js";
-import type { DispatchContext, DispatchOutcome, Dispatcher } from "../src/dispatch/types.js";
+import type {
+  DispatchContext,
+  DispatchOutcome,
+  Dispatcher,
+} from "../src/dispatch/types.js";
 import { accepted, ok as okPlan, retryable } from "../src/protocol/outcome.js";
 import {
   handleDelivery,
@@ -18,15 +22,21 @@ import { createMemoryLedger } from "../src/store/ledger.js";
 
 const SECRET = "whsec_test";
 
-function buildConfig(overrides: Record<string, unknown> = {}): HookdeckPluginConfig {
+function buildConfig(
+  overrides: Record<string, unknown> = {},
+): HookdeckPluginConfig {
   const parsed = parseHookdeckConfig({
     signingSecret: SECRET,
     routes: {
-      stripe: { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" } },
+      stripe: {
+        source: "stripe",
+        dispatch: { mode: "wake", sessionKey: "main" },
+      },
     },
     ...overrides,
   });
-  if (!parsed.ok) throw new Error(`bad test config: ${JSON.stringify(parsed.problems)}`);
+  if (!parsed.ok)
+    throw new Error(`bad test config: ${JSON.stringify(parsed.problems)}`);
   return parsed.config;
 }
 
@@ -39,10 +49,14 @@ interface HarnessOptions {
 function harness(options: HarnessOptions = {}) {
   const config = options.config ?? buildConfig();
   const dispatch = vi.fn<(ctx: DispatchContext) => Promise<DispatchOutcome>>(
-    options.dispatch ?? (async () => ({ settle: "succeeded", plan: okPlan("dispatched") })),
+    options.dispatch ??
+      (async () => ({ settle: "succeeded", plan: okPlan("dispatched") })),
   );
   const dispatcher: Dispatcher = { dispatch };
-  const ledger = createMemoryLedger({ ttlHours: config.dedupe.ttlHours, instanceId: "test" });
+  const ledger = createMemoryLedger({
+    ttlHours: config.dedupe.ttlHours,
+    instanceId: "test",
+  });
   const inFlight = createInFlightRegistry(config.maxConcurrent);
   const cancels: string[] = [];
 
@@ -54,7 +68,9 @@ function harness(options: HarnessOptions = {}) {
     dispatcherFor: () => dispatcher,
     onRetryCancel: (reason) => cancels.push(reason),
     resolveSigningSecret: async () =>
-      options.secret === undefined && !("secret" in options) ? SECRET : options.secret,
+      options.secret === undefined && !("secret" in options)
+        ? SECRET
+        : options.secret,
   };
 
   return { config, deps, dispatch, ledger, inFlight, cancels };
@@ -74,12 +90,17 @@ interface RequestOptions {
 function request(options: RequestOptions = {}): IncomingDelivery {
   const body = options.body ?? '{"type":"invoice.paid"}';
   const headers: Record<string, string | undefined> = {
-    "content-type": options.contentType === null ? undefined : (options.contentType ?? "application/json"),
+    "content-type":
+      options.contentType === null
+        ? undefined
+        : (options.contentType ?? "application/json"),
     "x-hookdeck-signature":
       options.signature === null
         ? undefined
-        : (options.signature ?? computeHookdeckSignature(Buffer.from(body, "utf8"), SECRET)),
-    "x-hookdeck-eventid": options.eventId === null ? undefined : (options.eventId ?? "evt_1"),
+        : (options.signature ??
+          computeHookdeckSignature(Buffer.from(body, "utf8"), SECRET)),
+    "x-hookdeck-eventid":
+      options.eventId === null ? undefined : (options.eventId ?? "evt_1"),
     "x-hookdeck-attempt-count":
       options.attemptCount === null ? undefined : (options.attemptCount ?? "1"),
     "x-hookdeck-source-name": "stripe",
@@ -93,7 +114,9 @@ function request(options: RequestOptions = {}): IncomingDelivery {
     method: options.method ?? "POST",
     url: options.url ?? "/hookdeck/stripe",
     headers,
-    stream: Object.assign(Readable.from([Buffer.from(body, "utf8")]), { headers }),
+    stream: Object.assign(Readable.from([Buffer.from(body, "utf8")]), {
+      headers,
+    }),
   };
 }
 
@@ -130,7 +153,10 @@ describe("handleDelivery — rejections before any work", () => {
     // Not cancelled: adding or enabling the route makes a retry of this same
     // event succeed, so cancelling would discard recoverable traffic.
     const { deps, cancels } = harness();
-    const result = await handleDelivery(deps, request({ url: "/hookdeck/nope" }));
+    const result = await handleDelivery(
+      deps,
+      request({ url: "/hookdeck/nope" }),
+    );
     expect(result.plan.status).toBe(404);
     expect(result.plan.retry).toEqual({ kind: "none" });
     expect(result.plan.deadLetter).toBe(false);
@@ -139,22 +165,30 @@ describe("handleDelivery — rejections before any work", () => {
 
   it("rejects a non-JSON content type with 415", async () => {
     const { deps } = harness();
-    expect((await handleDelivery(deps, request({ contentType: "text/plain" }))).plan.status).toBe(
-      415,
-    );
+    expect(
+      (await handleDelivery(deps, request({ contentType: "text/plain" }))).plan
+        .status,
+    ).toBe(415);
   });
 
   it("accepts a +json content type", async () => {
     const { deps } = harness();
     expect(
-      (await handleDelivery(deps, request({ contentType: "application/vnd.api+json" }))).plan
-        .status,
+      (
+        await handleDelivery(
+          deps,
+          request({ contentType: "application/vnd.api+json" }),
+        )
+      ).plan.status,
     ).toBe(200);
   });
 
   it("rejects a bad signature with 401 and does NOT dispatch", async () => {
     const { deps, dispatch } = harness();
-    const result = await handleDelivery(deps, request({ signature: "not-the-signature" }));
+    const result = await handleDelivery(
+      deps,
+      request({ signature: "not-the-signature" }),
+    );
     expect(result.plan.status).toBe(401);
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -191,14 +225,20 @@ describe("handleDelivery — rejections before any work", () => {
     // <source-url>/events arrives at /hookdeck/stripe/events. Exact matching
     // would 404 perfectly good traffic.
     const { deps, dispatch } = harness();
-    const result = await handleDelivery(deps, request({ url: "/hookdeck/stripe/events" }));
+    const result = await handleDelivery(
+      deps,
+      request({ url: "/hookdeck/stripe/events" }),
+    );
     expect(result.plan.status).toBe(200);
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
   it("does not let a route name prefix-match a longer sibling path", async () => {
     const { deps } = harness();
-    const result = await handleDelivery(deps, request({ url: "/hookdeck/stripe-test" }));
+    const result = await handleDelivery(
+      deps,
+      request({ url: "/hookdeck/stripe-test" }),
+    );
     expect(result.plan.status).toBe(404);
   });
 });
@@ -243,7 +283,10 @@ describe("handleDelivery — deduplication", () => {
     // The case that a naive event-id dedupe would break: Hookdeck retries a
     // failed event under the same id.
     const { deps, dispatch } = harness({
-      dispatch: async () => ({ settle: "failed" as const, plan: retryable(503, "dispatch_failed", "boom") }),
+      dispatch: async () => ({
+        settle: "failed" as const,
+        plan: retryable(503, "dispatch_failed", "boom"),
+      }),
     });
     const first = await handleDelivery(deps, request({ attemptCount: "1" }));
     expect(first.plan.status).toBe(503);
@@ -291,10 +334,16 @@ describe("handleDelivery — admission control", () => {
     // Share the registry so both handlers contend for the same capacity.
     slow.deps.inFlight = deps.inFlight;
 
-    const inFlight = handleDelivery(slow.deps, request({ eventId: "evt_slow" }));
+    const inFlight = handleDelivery(
+      slow.deps,
+      request({ eventId: "evt_slow" }),
+    );
     await vi.waitFor(() => expect(deps.inFlight.size).toBe(1));
 
-    const deferred = await handleDelivery(deps, request({ eventId: "evt_other" }));
+    const deferred = await handleDelivery(
+      deps,
+      request({ eventId: "evt_other" }),
+    );
     expect(deferred.plan.status).toBe(503);
     expect(deferred.plan.code).toBe("busy");
     expect(deferred.plan.retry).toEqual({ kind: "after", seconds: 7 });
@@ -322,7 +371,10 @@ describe("handleDelivery — admission control", () => {
     });
     slow.deps.inFlight = deps.inFlight;
 
-    const inFlight = handleDelivery(slow.deps, request({ eventId: "evt_slow" }));
+    const inFlight = handleDelivery(
+      slow.deps,
+      request({ eventId: "evt_slow" }),
+    );
     await vi.waitFor(() => expect(deps.inFlight.size).toBe(1));
 
     await handleDelivery(deps, request({ eventId: "evt_deferred" }));
@@ -364,7 +416,10 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
     const { deps, cancels } = harness();
     const result = await handleDelivery(deps, request({ body: "{not json" }));
     expect(result.plan.status).toBe(400);
-    expect(result.plan.retry).toEqual({ kind: "cancel", reason: "malformed_json" });
+    expect(result.plan.retry).toEqual({
+      kind: "cancel",
+      reason: "malformed_json",
+    });
     expect(result.plan.deadLetter).toBe(true);
     expect(cancels).toEqual(["malformed_json"]);
   });
@@ -389,7 +444,9 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
       // Node's Buffer.toString('utf8') never throws — it substitutes U+FFFD, so
       // this parses "successfully" into mangled text. That text is destined for
       // a prompt, so accepting it is worse than rejecting it.
-      const bytes = Buffer.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0xfe, 0x22, 0x7d]);
+      const bytes = Buffer.from([
+        0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0xfe, 0x22, 0x7d,
+      ]);
       expect(() => JSON.parse(bytes.toString("utf8"))).not.toThrow();
 
       const { deps, dispatch } = harness();
@@ -403,14 +460,20 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
 
     it("rejects invalid UTF-8 outside a string too", async () => {
       const { deps } = harness();
-      const result = await handleDelivery(deps, rawRequest(Buffer.from([0xff, 0xfe, 0x7b, 0x7d])));
+      const result = await handleDelivery(
+        deps,
+        rawRequest(Buffer.from([0xff, 0xfe, 0x7b, 0x7d])),
+      );
       expect(result.plan.status).toBe(400);
       expect(result.plan.code).toBe("malformed_json");
     });
 
     it("still accepts legitimate multi-byte UTF-8", async () => {
       const { deps, dispatch } = harness();
-      const bytes = Buffer.from(JSON.stringify({ n: "café ✓ 日本語 🚀" }), "utf8");
+      const bytes = Buffer.from(
+        JSON.stringify({ n: "café ✓ 日本語 🚀" }),
+        "utf8",
+      );
       const result = await handleDelivery(deps, rawRequest(bytes));
       expect(result.plan.status).toBe(200);
       expect(dispatch).toHaveBeenCalledOnce();
@@ -423,7 +486,9 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
       // explodes later at the network boundary — same root cause, different
       // blast radius, which is why each runtime needs its own fixture rather
       // than a shared assumption.
-      const bytes = Buffer.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xed, 0xa0, 0x80, 0x22, 0x7d]);
+      const bytes = Buffer.from([
+        0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xed, 0xa0, 0x80, 0x22, 0x7d,
+      ]);
       expect(() => JSON.parse(bytes.toString("utf8"))).not.toThrow();
 
       const { deps } = harness();
@@ -433,14 +498,23 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
     });
 
     it.each([
-      ["LE", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"a":"ok"}', "utf16le")])],
+      [
+        "LE",
+        Buffer.concat([
+          Buffer.from([0xff, 0xfe]),
+          Buffer.from('{"a":"ok"}', "utf16le"),
+        ]),
+      ],
       ["BE", Buffer.from([0xfe, 0xff, 0x00, 0x7b, 0x00, 0x7d])],
-    ])("rejects UTF-16 with a %s BOM, which RFC 8259 §8.1 forbids", async (_endian, bytes) => {
-      const { deps } = harness();
-      const result = await handleDelivery(deps, rawRequest(bytes));
-      expect(result.plan.status).toBe(400);
-      expect(result.plan.code).toBe("malformed_json");
-    });
+    ])(
+      "rejects UTF-16 with a %s BOM, which RFC 8259 §8.1 forbids",
+      async (_endian, bytes) => {
+        const { deps } = harness();
+        const result = await handleDelivery(deps, rawRequest(bytes));
+        expect(result.plan.status).toBe(400);
+        expect(result.plan.code).toBe("malformed_json");
+      },
+    );
 
     it("ACCEPTS an escaped lone surrogate, because that is valid JSON", async () => {
       // `"\ud800"` as an escape is ASCII on the wire, so the body is valid
@@ -460,7 +534,10 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
 
   it("returns a retryable 503 when dispatch fails transiently", async () => {
     const { deps, ledger } = harness({
-      dispatch: async () => ({ settle: "failed" as const, plan: retryable(503, "dispatch_failed", "queue unavailable") }),
+      dispatch: async () => ({
+        settle: "failed" as const,
+        plan: retryable(503, "dispatch_failed", "queue unavailable"),
+      }),
     });
     const result = await handleDelivery(deps, request());
     expect(result.plan.status).toBe(503);
@@ -471,7 +548,10 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
     // Do NOT flip to 2xx to keep the dashboard green — the failure is what
     // opens a Hookdeck Issue, and the Issue is the operator's alert.
     const { deps } = harness({
-      dispatch: async () => ({ settle: "failed" as const, plan: retryable(503, "dispatch_failed", "still broken") }),
+      dispatch: async () => ({
+        settle: "failed" as const,
+        plan: retryable(503, "dispatch_failed", "still broken"),
+      }),
     });
     const result = await handleDelivery(
       deps,
@@ -483,7 +563,10 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
 
   it("reports a suppressed wake as success rather than retrying it", async () => {
     const { deps } = harness({
-      dispatch: async () => ({ settle: "succeeded", plan: okPlan("dispatched", "suppressed") }),
+      dispatch: async () => ({
+        settle: "succeeded",
+        plan: okPlan("dispatched", "suppressed"),
+      }),
     });
     const result = await handleDelivery(deps, request());
     expect(result.plan.status).toBe(200);
@@ -494,7 +577,10 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
     // `deferred` means a background run owns the row. Settling here would tell
     // the next boot the work completed and leave a crash mid-run unrecovered.
     const { deps, ledger } = harness({
-      dispatch: async () => ({ settle: "deferred", plan: accepted("accepted") }),
+      dispatch: async () => ({
+        settle: "deferred",
+        plan: accepted("accepted"),
+      }),
     });
     const result = await handleDelivery(deps, request());
 
@@ -508,7 +594,11 @@ describe("handleDelivery — route filters", () => {
   function filtered(filters: unknown) {
     return buildConfig({
       routes: {
-        stripe: { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" }, filters },
+        stripe: {
+          source: "stripe",
+          dispatch: { mode: "wake", sessionKey: "main" },
+          filters,
+        },
       },
     });
   }
@@ -517,7 +607,10 @@ describe("handleDelivery — route filters", () => {
     const { deps, dispatch } = harness({
       config: filtered([{ path: "type", equals: "invoice.paid" }]),
     });
-    const result = await handleDelivery(deps, request({ body: '{"type":"charge.failed"}' }));
+    const result = await handleDelivery(
+      deps,
+      request({ body: '{"type":"charge.failed"}' }),
+    );
 
     expect(result.plan.status).toBe(200);
     expect(result.plan.code).toBe("ignored");
@@ -540,7 +633,10 @@ describe("handleDelivery — route filters", () => {
         { path: "livemode", equals: true },
       ]),
     });
-    await handleDelivery(deps, request({ body: '{"type":"invoice.paid","livemode":false}' }));
+    await handleDelivery(
+      deps,
+      request({ body: '{"type":"invoice.paid","livemode":false}' }),
+    );
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -556,7 +652,10 @@ describe("handleDelivery — route filters", () => {
 });
 
 describe("writePlan", () => {
-  function sink(): ResponseSink & { headers: Record<string, string>; body?: string } {
+  function sink(): ResponseSink & {
+    headers: Record<string, string>;
+    body?: string;
+  } {
     const headers: Record<string, string> = {};
     return {
       statusCode: 0,
@@ -578,7 +677,10 @@ describe("writePlan", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toBe("application/json; charset=utf-8");
-    expect(JSON.parse(res.body!)).toMatchObject({ ok: true, code: "dispatched" });
+    expect(JSON.parse(res.body!)).toMatchObject({
+      ok: true,
+      code: "dispatched",
+    });
   });
 
   it("emits Retry-After for a deferral", async () => {
@@ -621,7 +723,10 @@ describe("handleDelivery — deferral backs off once capacity is plainly not rec
     const { deps, config } = saturated();
     const result = await handleDelivery(deps, request({ attemptCount: "1" }));
     expect(result.plan.code).toBe("busy");
-    expect(result.plan.retry).toEqual({ kind: "after", seconds: config.busyRetryAfterSeconds });
+    expect(result.plan.retry).toEqual({
+      kind: "after",
+      seconds: config.busyRetryAfterSeconds,
+    });
   });
 
   it("drops the short interval after too many deferrals of the SAME event", async () => {

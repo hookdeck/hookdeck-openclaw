@@ -48,26 +48,48 @@ export interface BoundTaskFlowRuntime {
   resolve(token: string): { flowId: string } | undefined;
   getTaskSummary(flowId: string): unknown;
   setWaiting(
-    params: Record<string, unknown> & { flowId: string; expectedRevision: number },
+    params: Record<string, unknown> & {
+      flowId: string;
+      expectedRevision: number;
+    },
   ): TaskFlowMutationResult;
   resume(
-    params: Record<string, unknown> & { flowId: string; expectedRevision: number },
+    params: Record<string, unknown> & {
+      flowId: string;
+      expectedRevision: number;
+    },
   ): TaskFlowMutationResult;
   finish(
-    params: Record<string, unknown> & { flowId: string; expectedRevision: number },
+    params: Record<string, unknown> & {
+      flowId: string;
+      expectedRevision: number;
+    },
   ): TaskFlowMutationResult;
   fail(
-    params: Record<string, unknown> & { flowId: string; expectedRevision: number },
+    params: Record<string, unknown> & {
+      flowId: string;
+      expectedRevision: number;
+    },
   ): TaskFlowMutationResult;
-  requestCancel(params: { flowId: string; expectedRevision: number }): TaskFlowMutationResult;
-  cancel(params: { flowId: string; cfg: never }): Promise<{ cancelled: boolean; reason?: string }>;
-  runTask(
-    params: Record<string, unknown> & { flowId: string },
-  ): { created: boolean; found?: boolean; reason?: string };
+  requestCancel(params: {
+    flowId: string;
+    expectedRevision: number;
+  }): TaskFlowMutationResult;
+  cancel(params: {
+    flowId: string;
+    cfg: never;
+  }): Promise<{ cancelled: boolean; reason?: string }>;
+  runTask(params: Record<string, unknown> & { flowId: string }): {
+    created: boolean;
+    found?: boolean;
+    reason?: string;
+  };
 }
 
 export interface TaskFlowRuntime {
-  managedFlows: { bindSession(params: { sessionKey: string }): BoundTaskFlowRuntime };
+  managedFlows: {
+    bindSession(params: { sessionKey: string }): BoundTaskFlowRuntime;
+  };
 }
 
 /**

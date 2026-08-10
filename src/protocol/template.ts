@@ -44,7 +44,9 @@ const PLACEHOLDER = /\{\{\s*([a-zA-Z0-9_.[\]]+)\s*\}\}/g;
 const MAX_PATH_DEPTH = 12;
 
 function truncate(value: string, limit: number): string {
-  return value.length <= limit ? value : `${value.slice(0, limit)}… [truncated]`;
+  return value.length <= limit
+    ? value
+    : `${value.slice(0, limit)}… [truncated]`;
 }
 
 /** Resolves a dotted path against the payload. Returns undefined if any hop misses. */
@@ -56,7 +58,11 @@ export function resolvePath(root: unknown, path: string): unknown {
   for (const segment of segments) {
     if (current === null || typeof current !== "object") return undefined;
     // Reject prototype-walking paths outright rather than resolving them.
-    if (segment === "__proto__" || segment === "constructor" || segment === "prototype") {
+    if (
+      segment === "__proto__" ||
+      segment === "constructor" ||
+      segment === "prototype"
+    ) {
       return undefined;
     }
     current = (current as Record<string, unknown>)[segment];
@@ -113,7 +119,10 @@ export function renderTemplate(
     }
 
     if (key.startsWith("payload.")) {
-      return encodeValue(resolvePath(ctx.payload, key.slice("payload.".length)), maxValueLength);
+      return encodeValue(
+        resolvePath(ctx.payload, key.slice("payload.".length)),
+        maxValueLength,
+      );
     }
 
     // Unknown placeholders are left verbatim: silently blanking them would hide

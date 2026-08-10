@@ -22,7 +22,8 @@ export function createHostSecretResolver(
 ): HostSecretResolver {
   return async (value: unknown, relativePath: string) => {
     const config = getConfig();
-    if (config === undefined) return { value: undefined, reason: "plugin not started" };
+    if (config === undefined)
+      return { value: undefined, reason: "plugin not started" };
 
     const resolved = await resolveConfiguredSecretInputString({
       config,
@@ -33,7 +34,9 @@ export function createHostSecretResolver(
 
     return {
       value: resolved.value,
-      ...(resolved.unresolvedRefReason ? { reason: resolved.unresolvedRefReason } : {}),
+      ...(resolved.unresolvedRefReason
+        ? { reason: resolved.unresolvedRefReason }
+        : {}),
     };
   };
 }

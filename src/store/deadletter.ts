@@ -1,5 +1,9 @@
 import { join } from "node:path";
-import { createJsonlStore, type JsonlStore, type PersistenceState } from "./jsonl-store.js";
+import {
+  createJsonlStore,
+  type JsonlStore,
+  type PersistenceState,
+} from "./jsonl-store.js";
 import type { StoreIo } from "./store-io.js";
 
 /**
@@ -54,7 +58,9 @@ export interface DeadLetterRecord {
 }
 
 export interface DeadLetterLog {
-  record(entry: Omit<DeadLetterRecord, "id" | "createdAt">): Promise<DeadLetterRecord>;
+  record(
+    entry: Omit<DeadLetterRecord, "id" | "createdAt">,
+  ): Promise<DeadLetterRecord>;
   list(limit?: number): DeadLetterRecord[];
   count(): number;
   close(): Promise<void>;
@@ -75,7 +81,9 @@ export interface DeadLetterOptions {
   now?(): number;
 }
 
-export async function createDeadLetterLog(options: DeadLetterOptions): Promise<DeadLetterLog> {
+export async function createDeadLetterLog(
+  options: DeadLetterOptions,
+): Promise<DeadLetterLog> {
   const now = options.now ?? Date.now;
   const ttlMs = options.ttlHours * 60 * 60 * 1000;
   const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
@@ -85,15 +93,18 @@ export async function createDeadLetterLog(options: DeadLetterOptions): Promise<D
       ? join(options.stateDir, DEADLETTER_FILENAME)
       : undefined;
 
-  const store: JsonlStore<DeadLetterRecord> = createJsonlStore<DeadLetterRecord>({
-    ...(path !== undefined ? { path } : {}),
-    ...(options.io !== undefined ? { io: options.io } : {}),
-    keyOf: (record) => record.id,
-    isLive: (record, stamp) => stamp - record.createdAt <= ttlMs,
-    ...(options.onDegrade !== undefined ? { onDegrade: options.onDegrade } : {}),
-    ...(options.readOnly === true ? { readOnly: true } : {}),
-    now,
-  });
+  const store: JsonlStore<DeadLetterRecord> =
+    createJsonlStore<DeadLetterRecord>({
+      ...(path !== undefined ? { path } : {}),
+      ...(options.io !== undefined ? { io: options.io } : {}),
+      keyOf: (record) => record.id,
+      isLive: (record, stamp) => stamp - record.createdAt <= ttlMs,
+      ...(options.onDegrade !== undefined
+        ? { onDegrade: options.onDegrade }
+        : {}),
+      ...(options.readOnly === true ? { readOnly: true } : {}),
+      now,
+    });
 
   await store.load();
 

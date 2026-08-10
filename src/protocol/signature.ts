@@ -13,7 +13,10 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * octets Hookdeck sent: re-serialising parsed JSON will not reproduce them.
  */
 
-export function computeHookdeckSignature(rawBody: Buffer, secret: string): string {
+export function computeHookdeckSignature(
+  rawBody: Buffer,
+  secret: string,
+): string {
   return createHmac("sha256", secret).update(rawBody).digest("base64");
 }
 
@@ -64,10 +67,15 @@ export function verifyHookdeckSignature(
   // which slot matched.
   for (const [slot, candidate] of signatures.entries()) {
     if (typeof candidate !== "string" || candidate.length === 0) continue;
-    if (timingSafeEqualString(expected, candidate.trim()) && matchedSlot === undefined) {
+    if (
+      timingSafeEqualString(expected, candidate.trim()) &&
+      matchedSlot === undefined
+    ) {
       matchedSlot = slot;
     }
   }
 
-  return matchedSlot === undefined ? { valid: false } : { valid: true, matchedSlot };
+  return matchedSlot === undefined
+    ? { valid: false }
+    : { valid: true, matchedSlot };
 }

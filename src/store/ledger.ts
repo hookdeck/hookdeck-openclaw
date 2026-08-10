@@ -1,6 +1,14 @@
 import { join } from "node:path";
-import { isPrunable, type LedgerRow, type LedgerStatus } from "../protocol/admission.js";
-import { createJsonlStore, type JsonlStore, type PersistenceState } from "./jsonl-store.js";
+import {
+  isPrunable,
+  type LedgerRow,
+  type LedgerStatus,
+} from "../protocol/admission.js";
+import {
+  createJsonlStore,
+  type JsonlStore,
+  type PersistenceState,
+} from "./jsonl-store.js";
 import type { StoreIo } from "./store-io.js";
 
 export interface LedgerOptions {
@@ -27,8 +35,16 @@ export interface LedgerStats {
 export interface Ledger {
   get(eventId: string): LedgerRow | undefined;
   /** Records the start of a dispatch. Called only after admission succeeds. */
-  begin(eventId: string, attempt: number, meta?: { routeId?: string }): Promise<LedgerRow>;
-  settle(eventId: string, status: LedgerStatus, patch?: { agentRetries?: number }): Promise<void>;
+  begin(
+    eventId: string,
+    attempt: number,
+    meta?: { routeId?: string },
+  ): Promise<LedgerRow>;
+  settle(
+    eventId: string,
+    status: LedgerStatus,
+    patch?: { agentRetries?: number },
+  ): Promise<void>;
   /**
    * `running` rows owned by a previous process instance. Each represents work
    * whose outcome we do not know, because the process that owned it died
@@ -58,7 +74,9 @@ function buildStore(options: LedgerOptions): JsonlStore<LedgerRow> {
     // `running` rows are never expired away — they are the only record of work
     // whose outcome is unknown, and boot reconciliation depends on finding them.
     isLive: (row, stamp) => !isPrunable(row, stamp, ttlMs),
-    ...(options.onDegrade !== undefined ? { onDegrade: options.onDegrade } : {}),
+    ...(options.onDegrade !== undefined
+      ? { onDegrade: options.onDegrade }
+      : {}),
     ...(options.readOnly === true ? { readOnly: true } : {}),
     now,
   });
@@ -76,11 +94,16 @@ export async function createLedger(options: LedgerOptions): Promise<Ledger> {
  * who set `storage.enabled: false` — exactly-once within the process, but
  * at-least-once across a restart and no crash recovery.
  */
-export function createMemoryLedger(options: Omit<LedgerOptions, "stateDir" | "io">): Ledger {
+export function createMemoryLedger(
+  options: Omit<LedgerOptions, "stateDir" | "io">,
+): Ledger {
   return buildLedger(buildStore(options), options);
 }
 
-function buildLedger(store: JsonlStore<LedgerRow>, options: LedgerOptions): Ledger {
+function buildLedger(
+  store: JsonlStore<LedgerRow>,
+  options: LedgerOptions,
+): Ledger {
   const now = options.now ?? Date.now;
 
   return {
@@ -116,14 +139,18 @@ function buildLedger(store: JsonlStore<LedgerRow>, options: LedgerOptions): Ledg
         ...existing,
         status,
         updatedAt: now(),
-        ...(patch?.agentRetries !== undefined ? { agentRetries: patch.agentRetries } : {}),
+        ...(patch?.agentRetries !== undefined
+          ? { agentRetries: patch.agentRetries }
+          : {}),
       });
     },
 
     listOrphans() {
       return store
         .values()
-        .filter((row) => row.status === "running" && row.owner !== options.instanceId);
+        .filter(
+          (row) => row.status === "running" && row.owner !== options.instanceId,
+        );
     },
 
     async prune() {
@@ -141,7 +168,9 @@ function buildLedger(store: JsonlStore<LedgerRow>, options: LedgerOptions): Ledg
         running: store.values().filter((r) => r.status === "running").length,
         persistence: stats.persistence,
         compactions: stats.compactions,
-        ...(stats.firstError !== undefined ? { firstError: stats.firstError } : {}),
+        ...(stats.firstError !== undefined
+          ? { firstError: stats.firstError }
+          : {}),
       };
     },
   };

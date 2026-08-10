@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import type { HookdeckPluginConfig, RouteConfig } from "../plugin/config-types.js";
+import type {
+  HookdeckPluginConfig,
+  RouteConfig,
+} from "../plugin/config-types.js";
 import { RETRYABLE_STATUS_CODES } from "../protocol/outcome.js";
 
 /**
@@ -71,7 +74,8 @@ export function buildConnectionSpec(spec: ProvisionRouteSpec): ConnectionSpec {
     // the only limit in CLI transport.
     if (spec.rateLimit !== undefined) {
       destinationConfig.rate_limit = spec.rateLimit;
-      destinationConfig.rate_limit_period = spec.rateLimitPeriod ?? "concurrent";
+      destinationConfig.rate_limit_period =
+        spec.rateLimitPeriod ?? "concurrent";
     }
   }
 
@@ -149,7 +153,10 @@ export function routeProvisionSpec(options: {
     // backstop, and is the ONLY limit under CLI transport — CLI destinations
     // carry no `rate_limit` field at all.
     ...(http
-      ? { rateLimit: config.maxConcurrent, rateLimitPeriod: "concurrent" as const }
+      ? {
+          rateLimit: config.maxConcurrent,
+          rateLimitPeriod: "concurrent" as const,
+        }
       : {}),
     ...(config.provisioning.dedupeWindowMs !== undefined
       ? { dedupeWindowMs: config.provisioning.dedupeWindowMs }
@@ -165,11 +172,15 @@ export function routeProvisionSpec(options: {
  * Keys are sorted, so reordering config does not look like a change.
  */
 export function fingerprint(spec: ConnectionSpec): string {
-  return createHash("sha256").update(stableStringify(spec)).digest("hex").slice(0, 32);
+  return createHash("sha256")
+    .update(stableStringify(spec))
+    .digest("hex")
+    .slice(0, 32);
 }
 
 function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (value === null || typeof value !== "object")
+    return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, v]) => v !== undefined)
@@ -184,7 +195,9 @@ function stableStringify(value: unknown): string {
  * retried. `doctor` runs this rather than trusting that provisioning was the
  * last thing to touch the connection.
  */
-export function uncoveredStatuses(ruleCodes: readonly string[] | undefined): string[] {
+export function uncoveredStatuses(
+  ruleCodes: readonly string[] | undefined,
+): string[] {
   const covered = new Set(ruleCodes ?? []);
   const hasServerRange = [...covered].some((c) => /^5\d\d-5\d\d$/.test(c));
   return RETRYABLE_STATUS_CODES.filter((needed) => {

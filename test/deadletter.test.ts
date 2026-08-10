@@ -16,7 +16,10 @@ const entry = {
 describe("dead-letter log", () => {
   it("records and lists newest first", async () => {
     let clock = 0;
-    const log = await createDeadLetterLog({ ttlHours: 168, now: () => (clock += 1000) });
+    const log = await createDeadLetterLog({
+      ttlHours: 168,
+      now: () => (clock += 1000),
+    });
     await log.record({ ...entry, eventId: "evt_1" });
     await log.record({ ...entry, eventId: "evt_2" });
 
@@ -26,13 +29,24 @@ describe("dead-letter log", () => {
 
   it("survives a restart", async () => {
     const io = createFakeStoreIo();
-    const first = await createDeadLetterLog({ ttlHours: 168, stateDir: STATE_DIR, io });
+    const first = await createDeadLetterLog({
+      ttlHours: 168,
+      stateDir: STATE_DIR,
+      io,
+    });
     await first.record(entry);
     await first.close();
 
-    const second = await createDeadLetterLog({ ttlHours: 168, stateDir: STATE_DIR, io });
+    const second = await createDeadLetterLog({
+      ttlHours: 168,
+      stateDir: STATE_DIR,
+      io,
+    });
     expect(second.count()).toBe(1);
-    expect(second.list()[0]).toMatchObject({ eventId: "evt_1", code: "malformed_json" });
+    expect(second.list()[0]).toMatchObject({
+      eventId: "evt_1",
+      code: "malformed_json",
+    });
   });
 
   it("bounds itself so an outage cannot grow the log without limit", async () => {
@@ -42,11 +56,16 @@ describe("dead-letter log", () => {
       maxEntries: 3,
       now: () => (clock += 1000),
     });
-    for (let i = 0; i < 10; i += 1) await log.record({ ...entry, eventId: `evt_${i}` });
+    for (let i = 0; i < 10; i += 1)
+      await log.record({ ...entry, eventId: `evt_${i}` });
 
     expect(log.count()).toBe(3);
     // Oldest dropped, newest kept.
-    expect(log.list().map((r) => r.eventId)).toEqual(["evt_9", "evt_8", "evt_7"]);
+    expect(log.list().map((r) => r.eventId)).toEqual([
+      "evt_9",
+      "evt_8",
+      "evt_7",
+    ]);
   });
 
   it("expires entries past the TTL on reload", async () => {
@@ -73,7 +92,11 @@ describe("dead-letter log", () => {
 
   it("keeps working when persistence fails", async () => {
     const io = createFakeStoreIo({ failAfter: 0 });
-    const log = await createDeadLetterLog({ ttlHours: 168, stateDir: STATE_DIR, io });
+    const log = await createDeadLetterLog({
+      ttlHours: 168,
+      stateDir: STATE_DIR,
+      io,
+    });
     await log.record(entry);
 
     expect(log.count()).toBe(1);

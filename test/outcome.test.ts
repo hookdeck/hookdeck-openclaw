@@ -14,27 +14,37 @@ import {
 
 describe("renderRetryAfterHeader", () => {
   it("omits the header when there is no directive", () => {
-    expect(renderRetryAfterHeader(ok("done"), { allowRetryCancel: true })).toBeUndefined();
+    expect(
+      renderRetryAfterHeader(ok("done"), { allowRetryCancel: true }),
+    ).toBeUndefined();
   });
 
   it("renders whole seconds", () => {
     expect(
-      renderRetryAfterHeader(deferFor(503, "busy", 30), { allowRetryCancel: false }),
+      renderRetryAfterHeader(deferFor(503, "busy", 30), {
+        allowRetryCancel: false,
+      }),
     ).toBe("30");
   });
 
   it("rounds and floors at zero", () => {
-    expect(renderRetryAfterHeader(deferFor(503, "busy", 1.4), { allowRetryCancel: false })).toBe(
-      "1",
-    );
-    expect(renderRetryAfterHeader(deferFor(503, "busy", -5), { allowRetryCancel: false })).toBe(
-      "0",
-    );
+    expect(
+      renderRetryAfterHeader(deferFor(503, "busy", 1.4), {
+        allowRetryCancel: false,
+      }),
+    ).toBe("1");
+    expect(
+      renderRetryAfterHeader(deferFor(503, "busy", -5), {
+        allowRetryCancel: false,
+      }),
+    ).toBe("0");
   });
 
   it("renders -1 for a cancellation when enabled", () => {
     expect(
-      renderRetryAfterHeader(cancelRetries("malformed_json", 400), { allowRetryCancel: true }),
+      renderRetryAfterHeader(cancelRetries("malformed_json", 400), {
+        allowRetryCancel: true,
+      }),
     ).toBe("-1");
   });
 
@@ -42,7 +52,9 @@ describe("renderRetryAfterHeader", () => {
     // The default. With it off, wire behaviour matches the sibling Hermes and
     // n8n plugins exactly — Hookdeck's own retry rules stay in force.
     expect(
-      renderRetryAfterHeader(cancelRetries("malformed_json", 400), { allowRetryCancel: false }),
+      renderRetryAfterHeader(cancelRetries("malformed_json", 400), {
+        allowRetryCancel: false,
+      }),
     ).toBeUndefined();
   });
 });
@@ -110,7 +122,10 @@ describe("isRetryableStatus", () => {
       const covered =
         RETRYABLE_STATUS_CODES.includes(String(status)) ||
         (status >= 500 && RETRYABLE_STATUS_CODES.includes("500-599"));
-      expect(covered, `status ${status} is not in the provisioned retry rule`).toBe(true);
+      expect(
+        covered,
+        `status ${status} is not in the provisioned retry rule`,
+      ).toBe(true);
     }
   });
 
@@ -121,11 +136,16 @@ describe("isRetryableStatus", () => {
 
 describe("planToBody", () => {
   it("marks 2xx as ok", () => {
-    expect(JSON.parse(planToBody(ok("dispatched")))).toEqual({ ok: true, code: "dispatched" });
+    expect(JSON.parse(planToBody(ok("dispatched")))).toEqual({
+      ok: true,
+      code: "dispatched",
+    });
   });
 
   it("marks 4xx and 5xx as not ok", () => {
-    expect(JSON.parse(planToBody(retryable(503, "dispatch_failed", "boom")))).toEqual({
+    expect(
+      JSON.parse(planToBody(retryable(503, "dispatch_failed", "boom"))),
+    ).toEqual({
       ok: false,
       code: "dispatch_failed",
       message: "boom",
@@ -133,7 +153,11 @@ describe("planToBody", () => {
   });
 
   it("merges extra fields", () => {
-    expect(JSON.parse(planToBody(ok("duplicate"), { duplicate: true, eventId: "evt_1" }))).toEqual({
+    expect(
+      JSON.parse(
+        planToBody(ok("duplicate"), { duplicate: true, eventId: "evt_1" }),
+      ),
+    ).toEqual({
       ok: true,
       code: "duplicate",
       duplicate: true,

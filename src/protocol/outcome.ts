@@ -93,7 +93,9 @@ export function accepted(code: string, message?: string): ResponsePlan {
  * 413 is deliberately absent: the body limit is a plugin constant, not operator
  * config, so no change makes that event succeed.
  */
-export const RETRYABLE_STATUSES = [400, 401, 404, 408, 409, 429, 500, 502, 503] as const;
+export const RETRYABLE_STATUSES = [
+  400, 401, 404, 408, 409, 429, 500, 502, 503,
+] as const;
 export type RetryableStatus = (typeof RETRYABLE_STATUSES)[number];
 
 /**
@@ -115,7 +117,13 @@ export function deferFor(
   seconds: number,
   message?: string,
 ): ResponsePlan {
-  return { status, code, retry: { kind: "after", seconds }, message, deadLetter: false };
+  return {
+    status,
+    code,
+    retry: { kind: "after", seconds },
+    message,
+    deadLetter: false,
+  };
 }
 
 /**
@@ -123,7 +131,11 @@ export function deferFor(
  * cause might persist, precisely because exponential backoff stretches the
  * attempt budget out far enough for a human to intervene.
  */
-export function retryable(status: RetryableStatus, code: string, message?: string): ResponsePlan {
+export function retryable(
+  status: RetryableStatus,
+  code: string,
+  message?: string,
+): ResponsePlan {
   return { status, code, retry: NO_RETRY, message, deadLetter: false };
 }
 
@@ -141,7 +153,13 @@ export function cancelRetries(
   status: number,
   message?: string,
 ): ResponsePlan {
-  return { status, code: reason, retry: { kind: "cancel", reason }, message, deadLetter: true };
+  return {
+    status,
+    code: reason,
+    retry: { kind: "cancel", reason },
+    message,
+    deadLetter: true,
+  };
 }
 
 export interface RenderRetryAfterOptions {
@@ -178,10 +196,15 @@ export const RETRYABLE_STATUS_CODES: readonly string[] = [
 ];
 
 export function isRetryableStatus(status: number): boolean {
-  return (RETRYABLE_STATUSES as readonly number[]).includes(status) || status >= 500;
+  return (
+    (RETRYABLE_STATUSES as readonly number[]).includes(status) || status >= 500
+  );
 }
 
-export function planToBody(plan: ResponsePlan, extra?: Record<string, unknown>): string {
+export function planToBody(
+  plan: ResponsePlan,
+  extra?: Record<string, unknown>,
+): string {
   return JSON.stringify({
     ok: plan.status < 400,
     code: plan.code,

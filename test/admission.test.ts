@@ -12,7 +12,10 @@ function row(status: LedgerStatus, attempt: number): LedgerRow {
 
 describe("decideAdmission — shared contract §3", () => {
   it("admits a first delivery", () => {
-    expect(decideAdmission(undefined, 1)).toEqual({ admit: true, reason: "first_delivery" });
+    expect(decideAdmission(undefined, 1)).toEqual({
+      admit: true,
+      reason: "first_delivery",
+    });
   });
 
   it("admits when the attempt number advances", () => {
@@ -42,11 +45,17 @@ describe("decideAdmission — shared contract §3", () => {
   });
 
   it("reports in_flight distinctly for a duplicate of a running attempt", () => {
-    expect(decideAdmission(row("running", 2), 2)).toEqual({ admit: false, reason: "in_flight" });
+    expect(decideAdmission(row("running", 2), 2)).toEqual({
+      admit: false,
+      reason: "in_flight",
+    });
   });
 
   it("reports exhausted distinctly", () => {
-    expect(decideAdmission(row("exhausted", 4), 4)).toEqual({ admit: false, reason: "exhausted" });
+    expect(decideAdmission(row("exhausted", 4), 4)).toEqual({
+      admit: false,
+      reason: "exhausted",
+    });
   });
 
   describe("with no attempt header", () => {

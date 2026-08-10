@@ -1,5 +1,10 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { ALL_TOOL_NAMES, READ_TOOL_NAMES, registerHookdeckTools } from "../src/tools/index.js";
+import {
+  ALL_TOOL_NAMES,
+  READ_TOOL_NAMES,
+  registerHookdeckTools,
+} from "../src/tools/index.js";
 import type { ToolDeps } from "../src/tools/handlers.js";
 import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
 import { createCursorStore } from "../src/store/cursor-store.js";
@@ -23,8 +28,15 @@ interface CapturedTool {
   name: string;
   label: string;
   description: string;
-  parameters: { type?: string; properties?: Record<string, unknown>; required?: string[] };
-  execute: (toolCallId: string, params: unknown) => Promise<{ content: unknown[]; details: unknown }>;
+  parameters: {
+    type?: string;
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  execute: (
+    toolCallId: string,
+    params: unknown,
+  ) => Promise<{ content: unknown[]; details: unknown }>;
 }
 
 /** Tool results are AgentToolResults; the payload is JSON inside `content`. */
@@ -54,7 +66,12 @@ function captureTools(options: {
 async function liveDeps(): Promise<ToolDeps> {
   const parsed = parseHookdeckConfig({
     signingSecret: "whsec",
-    routes: { stripe: { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" } } },
+    routes: {
+      stripe: {
+        source: "stripe",
+        dispatch: { mode: "wake", sessionKey: "main" },
+      },
+    },
   });
   if (!parsed.ok) throw new Error("bad fixture");
   const io = createFakeStoreIo();
@@ -87,7 +104,10 @@ describe("tool registration — the AgentTool contract", () => {
 
   it("uses the erased execute signature (toolCallId first), not (params)", () => {
     for (const tool of captureTools({}).tools) {
-      expect(tool.execute.length, `${tool.name} execute arity`).toBeGreaterThanOrEqual(2);
+      expect(
+        tool.execute.length,
+        `${tool.name} execute arity`,
+      ).toBeGreaterThanOrEqual(2);
     }
   });
 
@@ -107,14 +127,19 @@ describe("tool registration", () => {
 
   it("drops the mutating tools when allowMutations is false", () => {
     const { tools } = captureTools({ allowMutations: false });
-    expect(tools.map((t) => t.name).sort()).toEqual([...READ_TOOL_NAMES].sort());
+    expect(tools.map((t) => t.name).sort()).toEqual(
+      [...READ_TOOL_NAMES].sort(),
+    );
     expect(tools.map((t) => t.name)).not.toContain("hookdeck_pause");
   });
 
   it("gives every tool a JSON-schema parameter object the host can validate", () => {
     for (const tool of captureTools({}).tools) {
       expect(tool.parameters.type, `${tool.name} parameters`).toBe("object");
-      expect(tool.description.length, `${tool.name} description`).toBeGreaterThan(40);
+      expect(
+        tool.description.length,
+        `${tool.name} description`,
+      ).toBeGreaterThan(40);
     }
   });
 
@@ -137,7 +162,10 @@ describe("tool registration", () => {
       logger: { warn: (m: string) => warnings.push(m), info: () => {} },
     };
     expect(() =>
-      registerHookdeckTools(api as never, { allowMutations: true, deps: () => undefined }),
+      registerHookdeckTools(api as never, {
+        allowMutations: true,
+        deps: () => undefined,
+      }),
     ).not.toThrow();
     expect(warnings.length).toBe(ALL_TOOL_NAMES.length);
   });
@@ -147,7 +175,10 @@ describe("tool execution through the registered surface", () => {
   it("explains that it needs a running Gateway rather than throwing", async () => {
     const { tools } = captureTools({ deps: () => undefined });
     for (const tool of tools) {
-      const result = unwrap(await tool.execute("call_1", {})) as { ok: boolean; note?: string };
+      const result = unwrap(await tool.execute("call_1", {})) as {
+        ok: boolean;
+        note?: string;
+      };
       expect(result.ok, tool.name).toBe(false);
       expect(result.note, tool.name).toMatch(/running Gateway/i);
     }
@@ -193,7 +224,10 @@ describe("tool execution through the registered surface", () => {
 
     const { tools } = captureTools({ deps: () => deps });
     const status = tools.find((t) => t.name === "hookdeck_status")!;
-    const result = unwrap(await status.execute("call_1", {})) as { ok: boolean; error: string };
+    const result = unwrap(await status.execute("call_1", {})) as {
+      ok: boolean;
+      error: string;
+    };
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("disk gone");
@@ -203,9 +237,15 @@ describe("tool execution through the registered surface", () => {
     const deps = await liveDeps();
     const { tools } = captureTools({ deps: () => deps });
 
-    for (const name of ["hookdeck_setup", "hookdeck_pause", "hookdeck_replay"]) {
+    for (const name of [
+      "hookdeck_setup",
+      "hookdeck_pause",
+      "hookdeck_replay",
+    ]) {
       const tool = tools.find((t) => t.name === name)!;
-      const result = unwrap(await tool.execute("call_1", { routeId: "stripe", paused: true })) as {
+      const result = unwrap(
+        await tool.execute("call_1", { routeId: "stripe", paused: true }),
+      ) as {
         note?: string;
       };
       expect(String(result.note), name).toMatch(/API key/i);
@@ -215,7 +255,8 @@ describe("tool execution through the registered surface", () => {
 
 describe("tool descriptions carry the safety rails a model needs", () => {
   const tools = captureTools({}).tools;
-  const describe_ = (name: string) => tools.find((t) => t.name === name)!.description;
+  const describe_ = (name: string) =>
+    tools.find((t) => t.name === name)!.description;
 
   it("tells the model replay is a dry run until confirmed", () => {
     expect(describe_("hookdeck_replay")).toMatch(/dry run unless confirm/i);
@@ -233,5 +274,39 @@ describe("tool descriptions carry the safety rails a model needs", () => {
 
   it("points the model at status first", () => {
     expect(describe_("hookdeck_status")).toMatch(/start here/i);
+  });
+});
+
+describe("hookdeck_issues is actually reachable", () => {
+  it("is declared in the manifest contract, without which the host silently registers nothing", async () => {
+    const manifest = JSON.parse(
+      await readFile(
+        new URL("../openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { contracts: { tools: string[] } };
+    expect([...manifest.contracts.tools].sort()).toEqual(
+      [...ALL_TOOL_NAMES].sort(),
+    );
+  });
+
+  it("is a mutating tool, so allowMutations: false removes it", () => {
+    const { tools } = captureTools({ allowMutations: false });
+    expect(tools.map((t) => t.name)).not.toContain("hookdeck_issues");
+  });
+
+  it("tells the model that clearing an issue is not the same as replaying it", () => {
+    const tool = captureTools({}).tools.find(
+      (t) => t.name === "hookdeck_issues",
+    )!;
+    expect(tool.description).toMatch(/dead-letter queue/i);
+    expect(tool.description).toMatch(/none of these replay/i);
+  });
+
+  it("defaults to listing rather than requiring an action", () => {
+    const tool = captureTools({}).tools.find(
+      (t) => t.name === "hookdeck_issues",
+    )!;
+    expect(tool.parameters.required ?? []).toEqual([]);
   });
 });

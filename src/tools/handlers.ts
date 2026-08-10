@@ -1,5 +1,9 @@
 import { runCatchUp } from "../catchup.js";
-import type { HookdeckClient } from "../hookdeck/client.js";
+import type {
+  HookdeckClient,
+  HookdeckIssue,
+  IssueStatus,
+} from "../hookdeck/client.js";
 import {
   buildConnectionSpec,
   fingerprint,
@@ -47,7 +51,12 @@ export interface ToolDeps {
   source: "live" | "disk";
   /** Live-only. Absent on a disk view. */
   inFlight?: InFlightRegistry | undefined;
-  transportStatus?: (() => Record<string, { state: string; restarts: number; recent: string[] }>) | undefined;
+  transportStatus?:
+    | (() => Record<
+        string,
+        { state: string; restarts: number; recent: string[] }
+      >)
+    | undefined;
   retryCancels?: (() => Record<string, number>) | undefined;
   /**
    * Resolves a route's provider verification credentials. Live-only: a disk
@@ -57,11 +66,28 @@ export interface ToolDeps {
    * provisioning around it — `PUT /connections` is an upsert, so a spec missing
    * the source auth block would strip verification off a live source.
    */
-  resolveVerification?: ((routeId: string) => Promise<Record<string, string> | undefined>) | undefined;
+  resolveVerification?:
+    | ((routeId: string) => Promise<Record<string, string> | undefined>)
+    | undefined;
   now?(): number;
 }
 
-const NO_CLIENT = "No Hookdeck API key is configured, so this needs an operator rather than an agent.";
+const NO_CLIENT =
+  "No Hookdeck API key is configured, so this needs an operator rather than an agent.";
+
+/**
+ * Said wherever Hookdeck answers "no such event".
+ *
+ * Retention is 3 days on free, 7 on Team, 30 on Growth. Past it an event is
+ * genuinely gone, and no amount of replaying will bring it back — which is a
+ * different answer from "the id is wrong", and the one an agent will otherwise
+ * spend several tool calls failing to distinguish.
+ */
+const MIN_RETENTION_DAYS = 3;
+
+const RETENTION_NOTE =
+  "Either the id is wrong or the event has aged out of retention (3 days on free, 7 on Team, " +
+  "30 on Growth). Events past retention cannot be replayed.";
 
 function requireClient(deps: ToolDeps): HookdeckClient | { error: string } {
   return deps.client ?? { error: NO_CLIENT };
@@ -86,7 +112,10 @@ function reportedPersistence(state: string): string {
   return state === "readonly" ? "active" : state;
 }
 
-export async function statusHandler(deps: ToolDeps, params: { routeId?: string }) {
+export async function statusHandler(
+  deps: ToolDeps,
+  params: { routeId?: string },
+) {
   const ledgerStats = deps.ledger.stats();
   const routes = Object.entries(deps.config.routes)
     .filter(([id]) => params.routeId === undefined || id === params.routeId)
@@ -131,11 +160,16 @@ export async function statusHandler(deps: ToolDeps, params: { routeId?: string }
       running: ledgerStats.running,
       // Says so out loud rather than implying a guarantee we are not making.
       persistence: reportedPersistence(ledgerStats.persistence),
-      ...(ledgerStats.firstError !== undefined ? { firstError: ledgerStats.firstError } : {}),
+      ...(ledgerStats.firstError !== undefined
+        ? { firstError: ledgerStats.firstError }
+        : {}),
     },
     deadLetters: deps.deadLetter.count(),
     retryCancellations: deps.retryCancels?.() ?? null,
-    transport: { mode: deps.config.transport.mode, listeners: deps.transportStatus?.() ?? null },
+    transport: {
+      mode: deps.config.transport.mode,
+      listeners: deps.transportStatus?.() ?? null,
+    },
     openIssues,
     configWarnings: deps.configWarnings(),
   };
@@ -166,7 +200,8 @@ export async function recentDeliveriesHandler(
   // Joined rather than returned separately: Hookdeck's view and ours disagree
   // precisely when something interesting happened.
   const rows = local.map((entry) => {
-    const row = entry.eventId !== undefined ? deps.ledger.get(entry.eventId) : undefined;
+    const row =
+      entry.eventId !== undefined ? deps.ledger.get(entry.eventId) : undefined;
     return {
       eventId: entry.eventId ?? null,
       routeId: entry.routeId ?? null,
@@ -184,11 +219,20 @@ export async function recentDeliveriesHandler(
   // Hookdeck's Issues ARE the dead-letter queue: a delivery issue with
   // strategy `final_attempt` means exactly "this event is not coming back",
   // with notifications and an acknowledge/resolve lifecycle attached.
-  let issues: { id: string; type: string | null; firstSeen: string | null; lastSeen: string | null }[] | null =
-    null;
+  let issues:
+    | {
+        id: string;
+        type: string | null;
+        firstSeen: string | null;
+        lastSeen: string | null;
+      }[]
+    | null = null;
   let issuesNote: string | undefined;
   if (deps.client !== undefined) {
-    const result = await deps.client.listIssues({ status: "OPENED", limit: limit });
+    const result = await deps.client.listIssues({
+      status: "OPENED",
+      limit: limit,
+    });
     if (result.ok) {
       issues = result.data.map((i) => ({
         id: i.id,
@@ -234,9 +278,14 @@ export async function recentDeliveriesHandler(
 // inspect one event — the "why did THIS fail?" tool
 // ---------------------------------------------------------------------------
 
-export async function inspectEventHandler(deps: ToolDeps, params: { eventId: string }) {
+export async function inspectEventHandler(
+  deps: ToolDeps,
+  params: { eventId: string },
+) {
   const row = deps.ledger.get(params.eventId);
-  const dead = deps.deadLetter.list(500).find((d) => d.eventId === params.eventId);
+  const dead = deps.deadLetter
+    .list(500)
+    .find((d) => d.eventId === params.eventId);
 
   const local = {
     ledger: row ?? null,
@@ -247,16 +296,43 @@ export async function inspectEventHandler(deps: ToolDeps, params: { eventId: str
   if (isError(client)) return { local, hookdeck: null, note: client.error };
 
   const event = await client.getEvent(params.eventId);
-  if (!event.ok) return { local, hookdeck: null, note: `Hookdeck lookup failed: ${event.message}` };
+  if (!event.ok) {
+    return {
+      local,
+      hookdeck: null,
+      note:
+        event.code === "not_found"
+          ? `Hookdeck has no event ${params.eventId}. ${RETENTION_NOTE}`
+          : `Hookdeck lookup failed: ${event.message}`,
+    };
+  }
+
+  // The event record carries an attempt COUNT. "Failed 3 times" and "failed
+  // three times with a 500, a timeout and a 401" are different answers, and
+  // only the second one tells you what to do next.
+  const attempts = await client.listAttempts(params.eventId);
 
   return {
     local,
     hookdeck: {
       id: event.data.id,
       status: event.data.status ?? null,
-      attempts: event.data.attempts ?? null,
+      attemptCount: event.data.attempts ?? null,
       responseStatus: event.data.response_status ?? null,
       createdAt: event.data.created_at ?? null,
+      attempts: attempts.ok
+        ? attempts.data.map((a) => ({
+            number: a.attempt_number ?? null,
+            status: a.status ?? null,
+            responseStatus: a.response_status ?? null,
+            errorCode: a.error_code ?? null,
+            trigger: a.trigger ?? null,
+            at: a.created_at ?? null,
+          }))
+        : null,
+      ...(attempts.ok
+        ? {}
+        : { attemptsNote: `Attempt history unavailable: ${attempts.message}` }),
     },
   };
 }
@@ -270,7 +346,9 @@ export async function doctorHandler(deps: ToolDeps) {
 
   const secretConfigured =
     deps.config.signingSecret !== undefined ||
-    Object.values(deps.config.routes).some((r) => r.signingSecret !== undefined);
+    Object.values(deps.config.routes).some(
+      (r) => r.signingSecret !== undefined,
+    );
   checks.push({
     name: "signing secret",
     ok: secretConfigured,
@@ -293,7 +371,10 @@ export async function doctorHandler(deps: ToolDeps) {
   checks.push({
     name: "interrupted work",
     ok: orphans === 0,
-    detail: orphans === 0 ? "none" : `${orphans} row(s) left running by a previous process`,
+    detail:
+      orphans === 0
+        ? "none"
+        : `${orphans} row(s) left running by a previous process`,
   });
 
   checks.push({
@@ -360,7 +441,9 @@ export async function setupHandler(
     if (!route.enabled) continue;
 
     const credentials =
-      route.verification !== undefined ? await deps.resolveVerification?.(routeId) : undefined;
+      route.verification !== undefined
+        ? await deps.resolveVerification?.(routeId)
+        : undefined;
 
     // Refuse rather than provision around it. The spec is an upsert: applying
     // one without the source auth block turns a verified source into an open
@@ -383,7 +466,8 @@ export async function setupHandler(
       routeProvisionSpec({ config: deps.config, routeId, route, credentials }),
     );
     const print = fingerprint(spec);
-    const unchanged = deps.cursors.get(routeId)?.provisioningFingerprint === print;
+    const unchanged =
+      deps.cursors.get(routeId)?.provisioningFingerprint === print;
 
     if (dryRun) {
       // Summarised rather than dumped: the spec carries `source.config.auth`
@@ -424,6 +508,158 @@ export async function setupHandler(
 }
 
 // ---------------------------------------------------------------------------
+// issues — the dead-letter queue
+// ---------------------------------------------------------------------------
+
+/**
+ * Hookdeck Issues, with their lifecycle.
+ *
+ * This is the dead-letter queue. The plugin keeps no parallel one and no
+ * parallel lifecycle: acknowledging here is what the dashboard, the
+ * notifications and anyone else looking at the project will see.
+ *
+ * Clearing an issue changes the report, never the events. An agent that
+ * resolves an issue without replaying has tidied the dashboard and fixed
+ * nothing, so every mutating response says what it did and did not do.
+ */
+export interface IssuesResult {
+  ok: boolean;
+  note?: string;
+  summary?: string;
+  dryRun?: boolean;
+  /** list */
+  status?: string;
+  total?: number | null;
+  shown?: number;
+  issues?: ReturnType<typeof summariseIssue>[];
+  /** get */
+  issue?: ReturnType<typeof summariseIssue>;
+  reference?: Record<string, unknown> | null;
+  /** mutations */
+  issueId?: string;
+  dismissed?: boolean;
+  replayed?: boolean;
+}
+
+export async function issuesHandler(
+  deps: ToolDeps,
+  params: {
+    action?: "list" | "get" | "acknowledge" | "resolve" | "ignore" | "dismiss";
+    issueId?: string;
+    status?: string;
+    type?: string;
+    limit?: number;
+    confirm?: boolean;
+  },
+): Promise<IssuesResult> {
+  const client = requireClient(deps);
+  if (isError(client)) return { ok: false, note: client.error };
+
+  const action = params.action ?? "list";
+
+  if (action === "list") {
+    const result = await client.listIssues({
+      status: params.status ?? "OPENED",
+      limit: Math.min(Math.max(params.limit ?? 20, 1), 100),
+      ...(params.type !== undefined ? { type: params.type } : {}),
+    });
+    if (!result.ok)
+      return { ok: false, note: `Issue lookup failed: ${result.message}` };
+
+    // Counted separately: a list is capped, so its length answers "how many did
+    // you show me", not "how many are there".
+    const total = await client.countIssues({
+      status: params.status ?? "OPENED",
+    });
+
+    return {
+      ok: true,
+      status: params.status ?? "OPENED",
+      total: total.ok ? total.data : null,
+      shown: result.data.length,
+      issues: result.data.map(summariseIssue),
+      ...(result.data.length === 0
+        ? { summary: "No open issues: Hookdeck has not given up on anything." }
+        : {}),
+    };
+  }
+
+  const issueId = params.issueId;
+  if (issueId === undefined) {
+    return {
+      ok: false,
+      note: `Action '${action}' needs an issueId. Run action 'list' first.`,
+    };
+  }
+
+  if (action === "get") {
+    const result = await client.getIssue(issueId);
+    if (!result.ok)
+      return { ok: false, note: `Issue lookup failed: ${result.message}` };
+    return {
+      ok: true,
+      issue: summariseIssue(result.data),
+      reference: result.data.reference ?? null,
+    };
+  }
+
+  if (action === "dismiss") {
+    // Dismissal removes the operator's record that anything went wrong. The
+    // events are untouched, but nobody will be told about them again.
+    if (params.confirm !== true) {
+      return {
+        ok: false,
+        dryRun: true,
+        note:
+          `Dismissing issue ${issueId} removes it from the project's record of what has failed. ` +
+          `The events themselves are unaffected and are NOT replayed. Pass confirm: true to ` +
+          `proceed, or use action 'resolve' if the underlying problem is actually fixed.`,
+      };
+    }
+    const result = await client.dismissIssue(issueId);
+    return result.ok
+      ? { ok: true, issueId, dismissed: true, replayed: false }
+      : { ok: false, note: `Dismiss failed: ${result.message}` };
+  }
+
+  const status = ISSUE_ACTION_STATUS[action];
+  const result = await client.updateIssue(issueId, status);
+  if (!result.ok)
+    return { ok: false, note: `Issue update failed: ${result.message}` };
+
+  return {
+    ok: true,
+    issueId,
+    status,
+    // Said every time, because "resolved" reads like "fixed" and it is not.
+    note:
+      status === "RESOLVED"
+        ? "Marked resolved. This changes the issue's status only — no events were replayed. " +
+          "Use hookdeck_replay if the failed events still need to run."
+        : `Marked ${status.toLowerCase()}. No events were replayed.`,
+  };
+}
+
+const ISSUE_ACTION_STATUS = {
+  acknowledge: "ACKNOWLEDGED",
+  resolve: "RESOLVED",
+  ignore: "IGNORED",
+} as const satisfies Record<string, IssueStatus>;
+
+function summariseIssue(issue: HookdeckIssue) {
+  return {
+    id: issue.id,
+    type: issue.type ?? issue.issue_type ?? null,
+    status: issue.status ?? null,
+    firstSeen: issue.first_seen_at ?? null,
+    lastSeen: issue.last_seen_at ?? null,
+    // Delivery issues aggregate on webhook_id / response_status / error_code —
+    // the three things that answer "which connection, failing how".
+    keys: issue.aggregation_keys ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // pause / resume
 // ---------------------------------------------------------------------------
 
@@ -443,7 +679,12 @@ export function cancelPendingAutoResume(routeId: string): void {
 
 export async function pauseHandler(
   deps: ToolDeps,
-  params: { routeId: string; paused: boolean; reason?: string; autoResumeAfterSeconds?: number },
+  params: {
+    routeId: string;
+    paused: boolean;
+    reason?: string;
+    autoResumeAfterSeconds?: number;
+  },
   schedule?: (fn: () => void, ms: number) => (() => void) | void,
 ) {
   const client = requireClient(deps);
@@ -477,7 +718,8 @@ export async function pauseHandler(
       autoResumeCancels.delete(params.routeId);
       void pauseHandler(deps, { routeId: params.routeId, paused: false });
     }, seconds * 1000);
-    if (typeof cancel === "function") autoResumeCancels.set(params.routeId, cancel);
+    if (typeof cancel === "function")
+      autoResumeCancels.set(params.routeId, cancel);
 
     return {
       ok: true,
@@ -492,7 +734,11 @@ export async function pauseHandler(
   const result = await client.unpauseConnection(cursor.connectionId);
   if (!result.ok) return { ok: false, note: result.message };
   await deps.cursors.patch(params.routeId, { pausedByUs: false });
-  return { ok: true, paused: false, note: "Held events will be delivered with trigger UNPAUSE." };
+  return {
+    ok: true,
+    paused: false,
+    note: "Held events will be delivered with trigger UNPAUSE.",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -501,7 +747,12 @@ export async function pauseHandler(
 
 export async function replayHandler(
   deps: ToolDeps,
-  params: { eventIds?: string[]; routeId?: string; sinceMinutes?: number; confirm?: boolean },
+  params: {
+    eventIds?: string[];
+    routeId?: string;
+    sinceMinutes?: number;
+    confirm?: boolean;
+  },
 ) {
   const client = requireClient(deps);
   if (isError(client)) return { ok: false, note: client.error };
@@ -511,9 +762,15 @@ export async function replayHandler(
     const accepted = params.eventIds.slice(0, MAX_EVENT_IDS);
     const dropped = params.eventIds.length - accepted.length;
     const outcomes = [];
+    let aged = 0;
     for (const id of accepted) {
       const result = await client.retryEvent(id);
-      outcomes.push({ eventId: id, ok: result.ok, ...(result.ok ? {} : { error: result.message }) });
+      if (!result.ok && result.code === "not_found") aged += 1;
+      outcomes.push({
+        eventId: id,
+        ok: result.ok,
+        ...(result.ok ? {} : { error: result.message }),
+      });
     }
     return {
       ok: true,
@@ -522,8 +779,14 @@ export async function replayHandler(
       // Never truncate quietly: a caller who passed 250 ids and saw "ok" would
       // reasonably believe all 250 were retried.
       ...(dropped > 0
-        ? { dropped, note: `Only the first ${MAX_EVENT_IDS} ids were retried; ${dropped} were not. Call again with the rest.` }
+        ? {
+            dropped,
+            note: `Only the first ${MAX_EVENT_IDS} ids were retried; ${dropped} were not. Call again with the rest.`,
+          }
         : {}),
+      // A 404 on retry is almost always retention, not a typo, and an agent
+      // will otherwise re-try the same dead ids.
+      ...(aged > 0 ? { notFound: aged, retentionNote: RETENTION_NOTE } : {}),
     };
   }
 
@@ -536,8 +799,17 @@ export async function replayHandler(
 
   const cursor = deps.cursors.get(params.routeId);
   if (cursor?.connectionId === undefined) {
-    return { ok: false, note: `No connection id known for route '${params.routeId}'.` };
+    return {
+      ok: false,
+      note: `No connection id known for route '${params.routeId}'.`,
+    };
   }
+
+  // Past retention there is nothing left to replay, whatever the window says.
+  // Warn rather than refuse: we cannot see the project's plan from here, and
+  // guessing a limit an operator has paid to exceed would be worse.
+  const beyondShortestRetention =
+    params.sinceMinutes > MIN_RETENTION_DAYS * 24 * 60;
 
   // An unscoped retry-everything costs real money, so a filtered replay is a
   // dry run until explicitly confirmed.
@@ -548,6 +820,7 @@ export async function replayHandler(
       note:
         `Would replay requests for route '${params.routeId}' from the last ${params.sinceMinutes} minute(s) ` +
         `that produced no CLI event. Re-run with confirm: true to execute.`,
+      ...(beyondShortestRetention ? { retentionWarning: RETENTION_NOTE } : {}),
     };
   }
 
@@ -562,6 +835,14 @@ export async function replayHandler(
   });
 
   return result.ran
-    ? { ok: true, mode: "bulk", batchId: result.batchId ?? null, estimated: result.estimated ?? null }
+    ? {
+        ok: true,
+        mode: "bulk",
+        batchId: result.batchId ?? null,
+        estimated: result.estimated ?? null,
+        ...(beyondShortestRetention
+          ? { retentionWarning: RETENTION_NOTE }
+          : {}),
+      }
     : { ok: false, note: `replay did not run: ${result.reason}` };
 }

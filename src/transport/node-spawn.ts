@@ -38,7 +38,9 @@ export const nodeSpawnChild: SpawnChild = (command, args, env): ChildHandle => {
     });
   }
 
-  child.on("error", (err) => lineCbs.forEach((cb) => cb(`spawn error: ${err.message}`)));
+  child.on("error", (err) =>
+    lineCbs.forEach((cb) => cb(`spawn error: ${err.message}`)),
+  );
   child.on("exit", (code, signal) => exitCbs.forEach((cb) => cb(code, signal)));
 
   return {
@@ -62,7 +64,10 @@ export const nodeSpawnChild: SpawnChild = (command, args, env): ChildHandle => {
  * Homebrew 2.4.0 means the check inspects one binary and the tunnel launches
  * another.
  */
-export async function findBinaries(name: string, pathEnv = process.env.PATH ?? ""): Promise<string[]> {
+export async function findBinaries(
+  name: string,
+  pathEnv = process.env.PATH ?? "",
+): Promise<string[]> {
   const found: string[] = [];
   for (const dir of pathEnv.split(delimiter).filter((d) => d.length > 0)) {
     const candidate = join(dir, name);
@@ -77,6 +82,8 @@ export async function findBinaries(name: string, pathEnv = process.env.PATH ?? "
 }
 
 export async function readCliVersion(binaryPath: string): Promise<string> {
-  const { stdout, stderr } = await execFileAsync(binaryPath, ["version"], { timeout: 10_000 });
+  const { stdout, stderr } = await execFileAsync(binaryPath, ["version"], {
+    timeout: 10_000,
+  });
   return `${stdout}\n${stderr}`.trim();
 }

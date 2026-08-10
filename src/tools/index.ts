@@ -4,6 +4,7 @@ import type { OpenClawPluginApi } from "../plugin/host-api.js";
 import {
   doctorHandler,
   inspectEventHandler,
+  issuesHandler,
   pauseHandler,
   recentDeliveriesHandler,
   replayHandler,
@@ -43,9 +44,18 @@ export const MUTATION_TOOL_NAMES = [
   "hookdeck_setup",
   "hookdeck_pause",
   "hookdeck_replay",
+  // Mutating because acknowledge/resolve/dismiss change what the whole project
+  // sees. `action: "list"` is read-only, but a tool is registered or not, and
+  // splitting one verb across both surfaces would be worse than losing the
+  // listing when mutations are off — `hookdeck_recent_deliveries` still shows
+  // open issues.
+  "hookdeck_issues",
 ] as const;
 
-export const ALL_TOOL_NAMES = [...READ_TOOL_NAMES, ...MUTATION_TOOL_NAMES] as const;
+export const ALL_TOOL_NAMES = [
+  ...READ_TOOL_NAMES,
+  ...MUTATION_TOOL_NAMES,
+] as const;
 
 export interface RegisterToolsOptions {
   allowMutations: boolean;
@@ -65,7 +75,10 @@ const NOT_STARTED = {
     "outside the running Gateway; otherwise check the state directory is accessible.",
 };
 
-export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterToolsOptions): void {
+export function registerHookdeckTools(
+  api: OpenClawPluginApi,
+  options: RegisterToolsOptions,
+): void {
   // `AgentTool.execute` is `(toolCallId, params, signal?, onUpdate?)` and must
   // resolve to an AgentToolResult — not the bare value a handler returns.
   // Getting either wrong produces a tool the host accepts and the agent never
@@ -79,11 +92,20 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
         return jsonResult(await handler(deps, params));
       } catch (err) {
         // A tool that throws is a worse experience than one that explains.
-        return jsonResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        return jsonResult({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     };
 
-  const tools: { name: string; label: string; description: string; parameters: unknown; execute: unknown }[] = [
+  const tools: {
+    name: string;
+    label: string;
+    description: string;
+    parameters: unknown;
+    execute: unknown;
+  }[] = [
     {
       name: "hookdeck_status",
       label: "Hookdeck Status",
@@ -92,7 +114,9 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
         "ledger persistence, dead-letter count, open Hookdeck issues, transport state and config warnings. " +
         "Start here when asked whether webhooks are working.",
       parameters: Type.Object({
-        routeId: Type.Optional(Type.String({ description: "Limit to one route." })),
+        routeId: Type.Optional(
+          Type.String({ description: "Limit to one route." }),
+        ),
       }),
       execute: wrap(statusHandler),
     },
@@ -107,9 +131,15 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
       parameters: Type.Object({
         routeId: Type.Optional(Type.String()),
         outcome: Type.Optional(
-          Type.Union([Type.Literal("failed"), Type.Literal("succeeded"), Type.Literal("all")]),
+          Type.Union([
+            Type.Literal("failed"),
+            Type.Literal("succeeded"),
+            Type.Literal("all"),
+          ]),
         ),
-        limit: Type.Optional(Type.Number({ description: "Default 20, max 100." })),
+        limit: Type.Optional(
+          Type.Number({ description: "Default 20, max 100." }),
+        ),
       }),
       execute: wrap(recentDeliveriesHandler),
     },
@@ -138,19 +168,21 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
     tools.push(
       {
         name: "hookdeck_setup",
-      label: "Hookdeck Setup",
+        label: "Hookdeck Setup",
         description:
           "Provisions Hookdeck connections for the configured routes. Defaults to a dry run that shows " +
           "what would change; pass dryRun false to apply.",
         parameters: Type.Object({
           routeId: Type.Optional(Type.String()),
-          dryRun: Type.Optional(Type.Boolean({ description: "Defaults to true." })),
+          dryRun: Type.Optional(
+            Type.Boolean({ description: "Defaults to true." }),
+          ),
         }),
         execute: wrap(setupHandler),
       },
       {
         name: "hookdeck_pause",
-      label: "Hookdeck Pause",
+        label: "Hookdeck Pause",
         description:
           "Pauses or resumes a route's Hookdeck connection. While paused, events are held durably at HOLD " +
           "and delivered on resume — nothing is dropped. Use this for a planned or diagnosed outage, not " +
@@ -160,7 +192,9 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
           paused: Type.Boolean(),
           reason: Type.Optional(Type.String()),
           autoResumeAfterSeconds: Type.Optional(
-            Type.Number({ description: "Clamped to 3600. Defaults to the clamp." }),
+            Type.Number({
+              description: "Clamped to 3600. Defaults to the clamp.",
+            }),
           ),
         }),
         execute: wrap((deps, params: Parameters<typeof pauseHandler>[1]) =>
@@ -169,7 +203,7 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
       },
       {
         name: "hookdeck_replay",
-      label: "Hookdeck Replay",
+        label: "Hookdeck Replay",
         description:
           "Re-delivers events. Pass eventIds to retry specific events, or routeId plus sinceMinutes for a " +
           "scoped bulk replay of requests nothing was listening for. Bulk replay is a dry run unless " +
@@ -181,6 +215,34 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
           confirm: Type.Optional(Type.Boolean()),
         }),
         execute: wrap(replayHandler),
+      },
+      {
+        name: "hookdeck_issues",
+        label: "Hookdeck Issues",
+        description:
+          "Hookdeck Issues ARE the dead-letter queue — this is where events that have been given up " +
+          "on are recorded, and where they are acknowledged and resolved. action 'list' (default) shows " +
+          "open issues; 'get' details one; 'acknowledge' says someone is on it; 'resolve' says the " +
+          "underlying problem is fixed; 'ignore' silences it; 'dismiss' removes the record entirely and " +
+          "needs confirm. None of these replay anything — use hookdeck_replay for that.",
+        parameters: Type.Object({
+          action: Type.Optional(
+            Type.Union([
+              Type.Literal("list"),
+              Type.Literal("get"),
+              Type.Literal("acknowledge"),
+              Type.Literal("resolve"),
+              Type.Literal("ignore"),
+              Type.Literal("dismiss"),
+            ]),
+          ),
+          issueId: Type.Optional(Type.String()),
+          status: Type.Optional(Type.String()),
+          type: Type.Optional(Type.String()),
+          limit: Type.Optional(Type.Number()),
+          confirm: Type.Optional(Type.Boolean()),
+        }),
+        execute: wrap(issuesHandler),
       },
     );
   }
@@ -201,6 +263,8 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
   // Gateway log.
   api.logger?.info?.(
     `declared ${registered.length} tool(s): ${registered.join(", ")}` +
-      (options.allowMutations ? "" : " (read-only: tools.allowMutations is false)"),
+      (options.allowMutations
+        ? ""
+        : " (read-only: tools.allowMutations is false)"),
   );
 }

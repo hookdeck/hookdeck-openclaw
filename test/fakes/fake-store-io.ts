@@ -17,14 +17,18 @@ export interface FakeStoreIo extends StoreIo {
   tearLastLine(path: string): void;
 }
 
-export function createFakeStoreIo(options: { failAfter?: number } = {}): FakeStoreIo {
+export function createFakeStoreIo(
+  options: { failAfter?: number } = {},
+): FakeStoreIo {
   const files = new Map<string, string>();
 
   const io: FakeStoreIo = {
     files,
     writes: 0,
     atomicWrites: 0,
-    ...(options.failAfter !== undefined ? { failAfter: options.failAfter } : {}),
+    ...(options.failAfter !== undefined
+      ? { failAfter: options.failAfter }
+      : {}),
 
     async ensureDir() {
       /* no-op */
@@ -62,7 +66,13 @@ export function createFakeStoreIo(options: { failAfter?: number } = {}): FakeSto
       const last = lines.pop();
       if (last === undefined) return;
       // Truncate mid-JSON, the way a crash during append would.
-      files.set(path, [...lines, last.slice(0, Math.max(1, Math.floor(last.length / 2)))].join("\n") + "\n");
+      files.set(
+        path,
+        [
+          ...lines,
+          last.slice(0, Math.max(1, Math.floor(last.length / 2))),
+        ].join("\n") + "\n",
+      );
     },
   };
 

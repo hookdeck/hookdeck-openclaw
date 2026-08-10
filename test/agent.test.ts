@@ -63,9 +63,12 @@ const settled = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 describe("renderSessionKey", () => {
   it("substitutes placeholders", () => {
-    expect(renderSessionKey("hook:{routeId}:{eventId}", { routeId: "s", eventId: "evt_1" })).toBe(
-      "hook:s:evt_1",
-    );
+    expect(
+      renderSessionKey("hook:{routeId}:{eventId}", {
+        routeId: "s",
+        eventId: "evt_1",
+      }),
+    ).toBe("hook:s:evt_1");
   });
 
   it("sanitises to a boring alphabet, since keys reach the host verbatim", () => {
@@ -76,13 +79,18 @@ describe("renderSessionKey", () => {
   });
 
   it("neutralises a payload-derived key that tries to escape", () => {
-    const key = renderSessionKey("hook:{eventId}", { routeId: "r", eventId: "../../etc/passwd" });
+    const key = renderSessionKey("hook:{eventId}", {
+      routeId: "r",
+      eventId: "../../etc/passwd",
+    });
     expect(key).not.toContain("/");
     expect(key).not.toContain("..");
   });
 
   it("caps the length", () => {
-    expect(renderSessionKey("x".repeat(500), { routeId: "r" }).length).toBe(200);
+    expect(renderSessionKey("x".repeat(500), { routeId: "r" }).length).toBe(
+      200,
+    );
   });
 });
 
@@ -144,10 +152,16 @@ describe("agent dispatch — async_retry", () => {
 
   it("asks Hookdeck to redeliver when the run fails", async () => {
     const subagent = fakeRunner({
-      waitFor: vi.fn(async () => ({ status: "error" as const, error: "model exploded" })),
+      waitFor: vi.fn(async () => ({
+        status: "error" as const,
+        error: "model exploded",
+      })),
     });
     const client: EventRetrier = {
-      retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
+      retryEvent: vi.fn(async (eventId: string) => ({
+        ok: true as const,
+        data: { eventId },
+      })),
     };
     const { dispatcher, ledger } = await harness({}, subagent, client);
 
@@ -155,15 +169,24 @@ describe("agent dispatch — async_retry", () => {
     await settled();
 
     expect(client.retryEvent).toHaveBeenCalledWith("evt_1");
-    expect(ledger.get("evt_1")).toMatchObject({ status: "failed", agentRetries: 1 });
+    expect(ledger.get("evt_1")).toMatchObject({
+      status: "failed",
+      agentRetries: 1,
+    });
   });
 
   it("exhausts rather than looping once the retry budget is spent", async () => {
     const subagent = fakeRunner({
-      waitFor: vi.fn(async () => ({ status: "error" as const, error: "still broken" })),
+      waitFor: vi.fn(async () => ({
+        status: "error" as const,
+        error: "still broken",
+      })),
     });
     const client: EventRetrier = {
-      retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
+      retryEvent: vi.fn(async (eventId: string) => ({
+        ok: true as const,
+        data: { eventId },
+      })),
     };
     const { dispatcher, ledger, deadLetter } = await harness(
       { maxAgentRetries: 1 },
@@ -228,7 +251,9 @@ describe("agent dispatch — sync", () => {
     const subagent = fakeRunner({
       waitFor: vi.fn(async () => {
         call += 1;
-        return call === 1 ? { status: "timeout" as const } : { status: "ok" as const };
+        return call === 1
+          ? { status: "timeout" as const }
+          : { status: "ok" as const };
       }),
     });
     const { dispatcher, ledger } = await harness({ ackMode: "sync" }, subagent);
@@ -253,7 +278,10 @@ describe("agent dispatch — sync", () => {
       }),
     });
     const client: EventRetrier = {
-      retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
+      retryEvent: vi.fn(async (eventId: string) => ({
+        ok: true as const,
+        data: { eventId },
+      })),
     };
     const { dispatcher } = await harness({ ackMode: "sync" }, subagent, client);
 
@@ -264,7 +292,10 @@ describe("agent dispatch — sync", () => {
   });
 
   it("passes the configured timeout to the host", async () => {
-    const { dispatcher, runner } = await harness({ ackMode: "sync", syncTimeoutSeconds: 30 });
+    const { dispatcher, runner } = await harness({
+      ackMode: "sync",
+      syncTimeoutSeconds: 30,
+    });
     await dispatcher.dispatch(ctx);
     expect(runner.waitFor).toHaveBeenCalledWith("run_1", 30_000);
   });
@@ -311,7 +342,11 @@ describe("agent dispatch — admission control", () => {
 
   it("frees the slot when starting the run throws", async () => {
     const subagent = fakeRunner({
-      start: vi.fn(async () => ({ ok: false as const, retryable: true, message: "gateway busy" })),
+      start: vi.fn(async () => ({
+        ok: false as const,
+        retryable: true,
+        message: "gateway busy",
+      })),
     });
     const { dispatcher } = await harness({ maxConcurrentRuns: 1 }, subagent);
 
@@ -348,7 +383,10 @@ describe("agent dispatch — a runner that cannot observe completion", () => {
   });
 
   it("frees its concurrency slot rather than leaking it", async () => {
-    const { dispatcher } = await harness({ maxConcurrentRuns: 1 }, blindRunner());
+    const { dispatcher } = await harness(
+      { maxConcurrentRuns: 1 },
+      blindRunner(),
+    );
     await dispatcher.dispatch(ctx);
     const second = await dispatcher.dispatch(ctx);
     expect(second.plan.status).toBe(202);
@@ -356,7 +394,11 @@ describe("agent dispatch — a runner that cannot observe completion", () => {
 
   it("still reports a failed start as retryable", async () => {
     const runner: AgentRunner = {
-      start: vi.fn(async () => ({ ok: false as const, retryable: true, message: "no flow" })),
+      start: vi.fn(async () => ({
+        ok: false as const,
+        retryable: true,
+        message: "no flow",
+      })),
     };
     const { dispatcher } = await harness({}, runner);
     const outcome = await dispatcher.dispatch(ctx);

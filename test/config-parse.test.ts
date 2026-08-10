@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { matchRoute, normalisePath, parseHookdeckConfig } from "../src/plugin/config-parse.js";
+import {
+  matchRoute,
+  normalisePath,
+  parseHookdeckConfig,
+} from "../src/plugin/config-parse.js";
 
 function parseOk(raw: unknown) {
   const result = parseHookdeckConfig(raw);
-  if (!result.ok) throw new Error(`expected ok, got ${JSON.stringify(result.problems)}`);
+  if (!result.ok)
+    throw new Error(`expected ok, got ${JSON.stringify(result.problems)}`);
   return result;
 }
 
-const ROUTE = { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" } };
+const ROUTE = {
+  source: "stripe",
+  dispatch: { mode: "wake", sessionKey: "main" },
+};
 
 describe("normalisePath", () => {
   it.each([
@@ -45,11 +53,15 @@ describe("parseHookdeckConfig — defaults", () => {
   });
 
   it("defaults a route path to its route id", () => {
-    expect(parseOk({ routes: { stripe: ROUTE } }).config.routes.stripe?.path).toBe("/stripe");
+    expect(
+      parseOk({ routes: { stripe: ROUTE } }).config.routes.stripe?.path,
+    ).toBe("/stripe");
   });
 
   it("normalises the header prefix", () => {
-    expect(parseOk({ headerPrefix: "X-ACME-" }).config.headerPrefix).toBe("x-acme");
+    expect(parseOk({ headerPrefix: "X-ACME-" }).config.headerPrefix).toBe(
+      "x-acme",
+    );
   });
 });
 
@@ -72,7 +84,10 @@ describe("parseHookdeckConfig — problems", () => {
 
   it("rejects two routes resolving to the same path", () => {
     const result = parseHookdeckConfig({
-      routes: { a: { ...ROUTE, path: "/same" }, b: { ...ROUTE, path: "/same" } },
+      routes: {
+        a: { ...ROUTE, path: "/same" },
+        b: { ...ROUTE, path: "/same" },
+      },
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.problems[0]?.message).toMatch(/collides/);
@@ -80,21 +95,27 @@ describe("parseHookdeckConfig — problems", () => {
 
   it("requires a source", () => {
     expect(
-      parseHookdeckConfig({ routes: { s: { dispatch: { mode: "wake", sessionKey: "m" } } } }).ok,
+      parseHookdeckConfig({
+        routes: { s: { dispatch: { mode: "wake", sessionKey: "m" } } },
+      }).ok,
     ).toBe(false);
   });
 
   it("requires a sessionKey for wake dispatch", () => {
     // enqueueSystemEvent throws without one, so this must fail at parse time.
-    expect(parseHookdeckConfig({ routes: { s: { source: "x", dispatch: { mode: "wake" } } } }).ok).toBe(
-      false,
-    );
+    expect(
+      parseHookdeckConfig({
+        routes: { s: { source: "x", dispatch: { mode: "wake" } } },
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects an unknown dispatch mode", () => {
     expect(
       parseHookdeckConfig({
-        routes: { s: { source: "x", dispatch: { mode: "agent", sessionKey: "m" } } },
+        routes: {
+          s: { source: "x", dispatch: { mode: "agent", sessionKey: "m" } },
+        },
       }).ok,
     ).toBe(false);
   });
@@ -103,17 +124,29 @@ describe("parseHookdeckConfig — problems", () => {
 describe("parseHookdeckConfig — warnings", () => {
   it("warns when a route has no signing secret anywhere", () => {
     const { warnings } = parseOk({ routes: { stripe: ROUTE } });
-    expect(warnings.some((w) => w.path === "routes.stripe.signingSecret")).toBe(true);
+    expect(warnings.some((w) => w.path === "routes.stripe.signingSecret")).toBe(
+      true,
+    );
   });
 
   it("does not warn when a top-level secret covers the route", () => {
-    const { warnings } = parseOk({ signingSecret: "whsec", routes: { stripe: ROUTE } });
+    const { warnings } = parseOk({
+      signingSecret: "whsec",
+      routes: { stripe: ROUTE },
+    });
     expect(warnings.some((w) => w.path.endsWith("signingSecret"))).toBe(false);
   });
 
   it("accepts a secretRef object as a signing secret", () => {
-    const ref = { source: "env", provider: "env", id: "HOOKDECK_SIGNING_SECRET" };
-    const { config } = parseOk({ signingSecret: ref, routes: { stripe: ROUTE } });
+    const ref = {
+      source: "env",
+      provider: "env",
+      id: "HOOKDECK_SIGNING_SECRET",
+    };
+    const { config } = parseOk({
+      signingSecret: ref,
+      routes: { stripe: ROUTE },
+    });
     expect(config.signingSecret).toEqual(ref);
   });
 
@@ -121,7 +154,8 @@ describe("parseHookdeckConfig — warnings", () => {
     // The host's secret-input schema marks all three fields required and is
     // strict. Accepting a laxer shape here would pass configs the host rejects.
     expect(
-      parseHookdeckConfig({ signingSecret: { source: "env", id: "SECRET" } }).ok,
+      parseHookdeckConfig({ signingSecret: { source: "env", id: "SECRET" } })
+        .ok,
     ).toBe(false);
   });
 
@@ -189,13 +223,21 @@ describe("matchRoute — Hookdeck path forwarding", () => {
 
   it("matches a sub-path, because Hookdeck appends the source request path", () => {
     // path_forwarding_disabled defaults to false.
-    expect(matchRoute(config, "/hookdeck/stripe/events")?.routeId).toBe("stripe");
-    expect(matchRoute(config, "/hookdeck/stripe/a/b/c")?.routeId).toBe("stripe");
+    expect(matchRoute(config, "/hookdeck/stripe/events")?.routeId).toBe(
+      "stripe",
+    );
+    expect(matchRoute(config, "/hookdeck/stripe/a/b/c")?.routeId).toBe(
+      "stripe",
+    );
   });
 
   it("prefers the longest configured route path", () => {
-    expect(matchRoute(config, "/hookdeck/stripe/refunds")?.routeId).toBe("stripeRefunds");
-    expect(matchRoute(config, "/hookdeck/stripe/refunds/extra")?.routeId).toBe("stripeRefunds");
+    expect(matchRoute(config, "/hookdeck/stripe/refunds")?.routeId).toBe(
+      "stripeRefunds",
+    );
+    expect(matchRoute(config, "/hookdeck/stripe/refunds/extra")?.routeId).toBe(
+      "stripeRefunds",
+    );
   });
 
   it("does not treat a longer sibling name as a sub-path", () => {

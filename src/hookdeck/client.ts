@@ -12,7 +12,10 @@
 
 export const HOOKDECK_API_BASE = "https://api.hookdeck.com/2025-07-01";
 
-export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+export type FetchLike = (
+  input: string,
+  init?: RequestInit,
+) => Promise<Response>;
 
 export interface HookdeckClientOptions {
   apiKey: string;
@@ -44,10 +47,40 @@ export interface HookdeckEvent {
 export interface HookdeckIssue {
   id: string;
   status?: string;
+  /**
+   * `delivery` | `transformation` | `backpressure` | `request`. The API field
+   * is `type`; `issue_type` is accepted too because older responses used it and
+   * a mislabelled issue is worse than a slightly wider type.
+   */
+  type?: string;
   issue_type?: string;
   first_seen_at?: string;
   last_seen_at?: string;
+  opened_at?: string;
+  /** Delivery issues key on `webhook_id`, `response_status`, `error_code`. */
   aggregation_keys?: Record<string, unknown>;
+  reference?: Record<string, unknown>;
+}
+
+/** Statuses `PUT /issues/{id}` accepts. */
+export const ISSUE_STATUSES = [
+  "OPENED",
+  "ACKNOWLEDGED",
+  "RESOLVED",
+  "IGNORED",
+] as const;
+export type IssueStatus = (typeof ISSUE_STATUSES)[number];
+
+export interface HookdeckAttempt {
+  id: string;
+  attempt_number?: number;
+  status?: string;
+  response_status?: number | null;
+  error_code?: string | null;
+  trigger?: string;
+  created_at?: string;
+  delivered_at?: string | null;
+  response_latency?: number | null;
 }
 
 export interface HookdeckClient {
@@ -93,7 +126,43 @@ export interface HookdeckClient {
   /** Raw delivered body, fetched separately from the event record. */
   getEventBody(id: string): Promise<ApiResult<unknown>>;
 
-  listIssues(params?: { status?: string; limit?: number }): Promise<ApiResult<HookdeckIssue[]>>;
+  listIssues(params?: {
+    status?: string;
+    limit?: number;
+    type?: string;
+  }): Promise<ApiResult<HookdeckIssue[]>>;
+
+  getIssue(id: string): Promise<ApiResult<HookdeckIssue>>;
+
+  /**
+   * Moves an issue through its lifecycle. This is the dead-letter queue's
+   * lifecycle — the plugin keeps no parallel one.
+   *
+   * `RESOLVED` says the underlying problem is fixed; `ACKNOWLEDGED` says a human
+   * or agent has seen it and is working on it. Neither replays anything: an
+   * issue is a report about events, so clearing it without retrying the events
+   * changes what the dashboard says and nothing else.
+   */
+  updateIssue(
+    id: string,
+    status: IssueStatus,
+  ): Promise<ApiResult<HookdeckIssue>>;
+
+  /**
+   * `DELETE /issues/{id}`. Dismissal is not deletion of the events, but it does
+   * remove the operator's record that anything went wrong, so the tool asks
+   * before doing it.
+   */
+  dismissIssue(id: string): Promise<ApiResult<{ id: string }>>;
+
+  /**
+   * Full attempt history for an event. `GET /events/{id}` carries only a count,
+   * which cannot answer "what did it fail with, and how many times".
+   */
+  listAttempts(
+    eventId: string,
+    limit?: number,
+  ): Promise<ApiResult<HookdeckAttempt[]>>;
 
   /** A real count. Counting a capped list reports the cap, not the truth. */
   countIssues(params?: { status?: string }): Promise<ApiResult<number>>;
@@ -109,7 +178,9 @@ export type EventRetrier = Pick<HookdeckClient, "retryEvent">;
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-export function createHookdeckClient(options: HookdeckClientOptions): HookdeckClient {
+export function createHookdeckClient(
+  options: HookdeckClientOptions,
+): HookdeckClient {
   const baseUrl = (options.baseUrl ?? HOOKDECK_API_BASE).replace(/\/+$/, "");
   const doFetch = options.fetch ?? (globalThis.fetch as FetchLike);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -164,7 +235,10 @@ export function createHookdeckClient(options: HookdeckClientOptions): HookdeckCl
 
   return {
     async retryEvent(eventId) {
-      const result = await request<unknown>("POST", `/events/${encodeURIComponent(eventId)}/retry`);
+      const result = await request<unknown>(
+        "POST",
+        `/events/${encodeURIComponent(eventId)}/retry`,
+      );
       return result.ok ? { ok: true, data: { eventId } } : result;
     },
 
@@ -173,23 +247,36 @@ export function createHookdeckClient(options: HookdeckClientOptions): HookdeckCl
     },
 
     async getConnection(id) {
-      return request<HookdeckConnection>("GET", `/connections/${encodeURIComponent(id)}`);
+      return request<HookdeckConnection>(
+        "GET",
+        `/connections/${encodeURIComponent(id)}`,
+      );
     },
 
     async pauseConnection(id) {
-      return request<HookdeckConnection>("PUT", `/connections/${encodeURIComponent(id)}/pause`);
+      return request<HookdeckConnection>(
+        "PUT",
+        `/connections/${encodeURIComponent(id)}/pause`,
+      );
     },
 
     async unpauseConnection(id) {
-      return request<HookdeckConnection>("PUT", `/connections/${encodeURIComponent(id)}/unpause`);
+      return request<HookdeckConnection>(
+        "PUT",
+        `/connections/${encodeURIComponent(id)}/unpause`,
+      );
     },
 
     async listEvents(params = {}) {
       const query = new URLSearchParams();
       query.set("limit", String(params.limit ?? 20));
       if (params.status !== undefined) query.set("status", params.status);
-      if (params.webhookId !== undefined) query.set("webhook_id", params.webhookId);
-      const result = await request<{ models?: HookdeckEvent[] }>("GET", `/events?${query}`);
+      if (params.webhookId !== undefined)
+        query.set("webhook_id", params.webhookId);
+      const result = await request<{ models?: HookdeckEvent[] }>(
+        "GET",
+        `/events?${query}`,
+      );
       return result.ok ? { ok: true, data: result.data.models ?? [] } : result;
     },
 
@@ -198,21 +285,63 @@ export function createHookdeckClient(options: HookdeckClientOptions): HookdeckCl
     },
 
     async getEventBody(id) {
-      return request<unknown>("GET", `/events/${encodeURIComponent(id)}/raw_body`);
+      return request<unknown>(
+        "GET",
+        `/events/${encodeURIComponent(id)}/raw_body`,
+      );
     },
 
     async listIssues(params = {}) {
       const query = new URLSearchParams();
       query.set("limit", String(params.limit ?? 20));
       if (params.status !== undefined) query.set("status", params.status);
-      const result = await request<{ models?: HookdeckIssue[] }>("GET", `/issues?${query}`);
+      if (params.type !== undefined) query.set("type", params.type);
+      const result = await request<{ models?: HookdeckIssue[] }>(
+        "GET",
+        `/issues?${query}`,
+      );
+      return result.ok ? { ok: true, data: result.data.models ?? [] } : result;
+    },
+
+    async getIssue(id) {
+      return request<HookdeckIssue>("GET", `/issues/${encodeURIComponent(id)}`);
+    },
+
+    async updateIssue(id, status) {
+      return request<HookdeckIssue>(
+        "PUT",
+        `/issues/${encodeURIComponent(id)}`,
+        { status },
+      );
+    },
+
+    async dismissIssue(id) {
+      const result = await request<unknown>(
+        "DELETE",
+        `/issues/${encodeURIComponent(id)}`,
+      );
+      return result.ok ? { ok: true, data: { id } } : result;
+    },
+
+    async listAttempts(eventId, limit = 20) {
+      const query = new URLSearchParams({
+        event_id: eventId,
+        limit: String(limit),
+      });
+      const result = await request<{ models?: HookdeckAttempt[] }>(
+        "GET",
+        `/attempts?${query}`,
+      );
       return result.ok ? { ok: true, data: result.data.models ?? [] } : result;
     },
 
     async countIssues(params = {}) {
       const query = new URLSearchParams();
       if (params.status !== undefined) query.set("status", params.status);
-      const result = await request<{ count?: number }>("GET", `/issues/count?${query}`);
+      const result = await request<{ count?: number }>(
+        "GET",
+        `/issues/count?${query}`,
+      );
       return result.ok ? { ok: true, data: result.data.count ?? 0 } : result;
     },
 

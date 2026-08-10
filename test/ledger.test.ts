@@ -8,7 +8,12 @@ const STATE_DIR = "/state/hookdeck";
 describe("ledger — durability across a restart", () => {
   it("remembers a settled event, so a redelivery after restart is a duplicate", async () => {
     const io = createFakeStoreIo();
-    const first = await createLedger({ ttlHours: 168, instanceId: "boot-1", stateDir: STATE_DIR, io });
+    const first = await createLedger({
+      ttlHours: 168,
+      instanceId: "boot-1",
+      stateDir: STATE_DIR,
+      io,
+    });
     await first.begin("evt_1", 1, { routeId: "stripe" });
     await first.settle("evt_1", "succeeded");
     await first.close();
@@ -27,7 +32,12 @@ describe("ledger — durability across a restart", () => {
 
   it("still admits a genuine retry after a restart", async () => {
     const io = createFakeStoreIo();
-    const first = await createLedger({ ttlHours: 168, instanceId: "boot-1", stateDir: STATE_DIR, io });
+    const first = await createLedger({
+      ttlHours: 168,
+      instanceId: "boot-1",
+      stateDir: STATE_DIR,
+      io,
+    });
     await first.begin("evt_1", 1);
     await first.settle("evt_1", "failed");
     await first.close();
@@ -43,14 +53,24 @@ describe("ledger — durability across a restart", () => {
 
   it("preserves the highest attempt number seen", async () => {
     const io = createFakeStoreIo();
-    const first = await createLedger({ ttlHours: 168, instanceId: "b1", stateDir: STATE_DIR, io });
+    const first = await createLedger({
+      ttlHours: 168,
+      instanceId: "b1",
+      stateDir: STATE_DIR,
+      io,
+    });
     await first.begin("evt_1", 5);
     await first.settle("evt_1", "failed");
     // A lower attempt must not lower the watermark.
     await first.begin("evt_1", 2);
     await first.close();
 
-    const second = await createLedger({ ttlHours: 168, instanceId: "b2", stateDir: STATE_DIR, io });
+    const second = await createLedger({
+      ttlHours: 168,
+      instanceId: "b2",
+      stateDir: STATE_DIR,
+      io,
+    });
     expect(second.get("evt_1")?.attempt).toBe(5);
   });
 });
@@ -58,7 +78,12 @@ describe("ledger — durability across a restart", () => {
 describe("ledger — orphan detection", () => {
   it("treats a running row from a dead instance as an orphan", async () => {
     const io = createFakeStoreIo();
-    const first = await createLedger({ ttlHours: 168, instanceId: "boot-1", stateDir: STATE_DIR, io });
+    const first = await createLedger({
+      ttlHours: 168,
+      instanceId: "boot-1",
+      stateDir: STATE_DIR,
+      io,
+    });
     await first.begin("evt_crashed", 1, { routeId: "stripe" });
     // No settle: the process died mid-dispatch.
     await first.close();
@@ -71,7 +96,11 @@ describe("ledger — orphan detection", () => {
     });
     const orphans = second.listOrphans();
     expect(orphans).toHaveLength(1);
-    expect(orphans[0]).toMatchObject({ eventId: "evt_crashed", routeId: "stripe", owner: "boot-1" });
+    expect(orphans[0]).toMatchObject({
+      eventId: "evt_crashed",
+      routeId: "stripe",
+      owner: "boot-1",
+    });
   });
 
   it("does not treat this instance's own running rows as orphans", async () => {
@@ -82,12 +111,22 @@ describe("ledger — orphan detection", () => {
 
   it("does not treat settled rows from a dead instance as orphans", async () => {
     const io = createFakeStoreIo();
-    const first = await createLedger({ ttlHours: 168, instanceId: "boot-1", stateDir: STATE_DIR, io });
+    const first = await createLedger({
+      ttlHours: 168,
+      instanceId: "boot-1",
+      stateDir: STATE_DIR,
+      io,
+    });
     await first.begin("evt_ok", 1);
     await first.settle("evt_ok", "succeeded");
     await first.close();
 
-    const second = await createLedger({ ttlHours: 168, instanceId: "boot-2", stateDir: STATE_DIR, io });
+    const second = await createLedger({
+      ttlHours: 168,
+      instanceId: "boot-2",
+      stateDir: STATE_DIR,
+      io,
+    });
     expect(second.listOrphans()).toHaveLength(0);
   });
 });
@@ -97,7 +136,11 @@ describe("ledger — pruning", () => {
     // Running rows are the only record of work whose outcome is unknown, and
     // boot recovery reads them. Pruning one loses the work silently.
     let clock = 0;
-    const ledger = createMemoryLedger({ ttlHours: 1, instanceId: "b", now: () => clock });
+    const ledger = createMemoryLedger({
+      ttlHours: 1,
+      instanceId: "b",
+      now: () => clock,
+    });
     await ledger.begin("evt_stuck", 1);
     clock = 1_000 * 60 * 60 * 24 * 365;
     expect(await ledger.prune()).toBe(0);
@@ -106,7 +149,11 @@ describe("ledger — pruning", () => {
 
   it("prunes terminal rows past the TTL", async () => {
     let clock = 0;
-    const ledger = createMemoryLedger({ ttlHours: 1, instanceId: "b", now: () => clock });
+    const ledger = createMemoryLedger({
+      ttlHours: 1,
+      instanceId: "b",
+      now: () => clock,
+    });
     await ledger.begin("evt_1", 1);
     await ledger.settle("evt_1", "succeeded");
     clock = 1_000 * 60 * 60 * 2;
@@ -145,7 +192,12 @@ describe("ledger — pruning", () => {
 describe("ledger — degradation", () => {
   it("keeps working when the disk fails, reporting persistence disabled", async () => {
     const io = createFakeStoreIo({ failAfter: 1 });
-    const ledger = await createLedger({ ttlHours: 168, instanceId: "b", stateDir: STATE_DIR, io });
+    const ledger = await createLedger({
+      ttlHours: 168,
+      instanceId: "b",
+      stateDir: STATE_DIR,
+      io,
+    });
 
     await ledger.begin("evt_1", 1);
     await ledger.settle("evt_1", "succeeded");

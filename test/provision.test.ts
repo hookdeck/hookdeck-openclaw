@@ -29,7 +29,10 @@ describe("buildConnectionSpec — the two undocumented requirements", () => {
   it("pins path_forwarding_disabled, which defaults to false", () => {
     // Left false, a provider posting to <source-url>/events is delivered to
     // <path>/events.
-    const config = buildConnectionSpec(cli).destination.config as Record<string, unknown>;
+    const config = buildConnectionSpec(cli).destination.config as Record<
+      string,
+      unknown
+    >;
     expect(config.path_forwarding_disabled).toBe(true);
   });
 });
@@ -46,19 +49,21 @@ describe("buildConnectionSpec — retry rule", () => {
   });
 
   it("adds a deduplicate rule only when a window is configured", () => {
-    expect(buildConnectionSpec(cli).rules.some((r) => r.type === "deduplicate")).toBe(false);
+    expect(
+      buildConnectionSpec(cli).rules.some((r) => r.type === "deduplicate"),
+    ).toBe(false);
     const withDedupe = buildConnectionSpec({ ...cli, dedupeWindowMs: 5_000 });
-    expect(withDedupe.rules.find((r) => r.type === "deduplicate")).toMatchObject({ window: 5_000 });
+    expect(
+      withDedupe.rules.find((r) => r.type === "deduplicate"),
+    ).toMatchObject({ window: 5_000 });
   });
 });
 
 describe("buildConnectionSpec — destination kinds", () => {
   it("uses path for CLI and never a rate limit", () => {
     // CLI destinations carry no rate_limit field at all.
-    const config = buildConnectionSpec({ ...cli, rateLimit: 5 }).destination.config as Record<
-      string,
-      unknown
-    >;
+    const config = buildConnectionSpec({ ...cli, rateLimit: 5 }).destination
+      .config as Record<string, unknown>;
     expect(config.path).toBe("/hookdeck/stripe");
     expect(config.rate_limit).toBeUndefined();
   });
@@ -102,7 +107,11 @@ describe("fingerprint", () => {
     const spec = buildConnectionSpec(cli);
     const reordered = {
       rules: spec.rules,
-      destination: { config: spec.destination.config, name: spec.destination.name, type: spec.destination.type },
+      destination: {
+        config: spec.destination.config,
+        name: spec.destination.name,
+        type: spec.destination.type,
+      },
       source: spec.source,
       name: spec.name,
     } as unknown as typeof spec;
@@ -111,9 +120,9 @@ describe("fingerprint", () => {
 
   it("ignores undefined-valued keys", () => {
     const spec = buildConnectionSpec(cli);
-    expect(fingerprint({ ...spec, extra: undefined } as unknown as typeof spec)).toBe(
-      fingerprint(spec),
-    );
+    expect(
+      fingerprint({ ...spec, extra: undefined } as unknown as typeof spec),
+    ).toBe(fingerprint(spec));
   });
 
   it("changes when the spec meaningfully changes", () => {
@@ -123,7 +132,9 @@ describe("fingerprint", () => {
   });
 
   it("is unchanged for an identical spec built twice", () => {
-    expect(fingerprint(buildConnectionSpec(cli))).toBe(fingerprint(buildConnectionSpec(cli)));
+    expect(fingerprint(buildConnectionSpec(cli))).toBe(
+      fingerprint(buildConnectionSpec(cli)),
+    );
   });
 });
 
@@ -146,8 +157,12 @@ describe("uncoveredStatuses — the doctor check", () => {
   });
 
   it("accepts an equivalent server range", () => {
-    expect(uncoveredStatuses([...RETRYABLE_STATUS_CODES.filter((c) => c !== "500-599"), "500-599"]))
-      .toEqual([]);
+    expect(
+      uncoveredStatuses([
+        ...RETRYABLE_STATUS_CODES.filter((c) => c !== "500-599"),
+        "500-599",
+      ]),
+    ).toEqual([]);
   });
 });
 
@@ -157,7 +172,12 @@ describe("we use Hookdeck's own features rather than only our local copies", () 
       signingSecret: "whsec",
       maxConcurrent: 7,
       transport: { mode: "http", publicUrl: "https://gw.example.com" },
-      routes: { stripe: { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" } } },
+      routes: {
+        stripe: {
+          source: "stripe",
+          dispatch: { mode: "wake", sessionKey: "main" },
+        },
+      },
     });
     if (!parsed.ok) throw new Error(JSON.stringify(parsed.problems));
     return parsed.config;
@@ -168,7 +188,11 @@ describe("we use Hookdeck's own features rather than only our local copies", () 
     // 503, which spends one of the event's finite attempts to say "not now".
     const config = base();
     const spec = buildConnectionSpec(
-      routeProvisionSpec({ config, routeId: "stripe", route: config.routes.stripe! }),
+      routeProvisionSpec({
+        config,
+        routeId: "stripe",
+        route: config.routes.stripe!,
+      }),
     );
     const destination = spec.destination.config as Record<string, unknown>;
     expect(destination.rate_limit).toBe(7);
@@ -176,9 +200,16 @@ describe("we use Hookdeck's own features rather than only our local copies", () 
   });
 
   it("omits it in CLI mode, where the field does not exist", () => {
-    const config = { ...base(), transport: { ...base().transport, mode: "cli" as const } };
+    const config = {
+      ...base(),
+      transport: { ...base().transport, mode: "cli" as const },
+    };
     const spec = buildConnectionSpec(
-      routeProvisionSpec({ config, routeId: "stripe", route: config.routes.stripe! }),
+      routeProvisionSpec({
+        config,
+        routeId: "stripe",
+        route: config.routes.stripe!,
+      }),
     );
     expect(spec.destination.config).not.toHaveProperty("rate_limit");
   });
@@ -187,9 +218,17 @@ describe("we use Hookdeck's own features rather than only our local copies", () 
     // PUT /connections is an upsert. A spec built without the source auth
     // block turns a verified Stripe source into an open endpoint.
     const config = base();
-    const route = { ...config.routes.stripe!, verification: { provider: "STRIPE", credentials: {} } };
+    const route = {
+      ...config.routes.stripe!,
+      verification: { provider: "STRIPE", credentials: {} },
+    };
     const spec = buildConnectionSpec(
-      routeProvisionSpec({ config, routeId: "stripe", route, credentials: { webhook_secret: "s" } }),
+      routeProvisionSpec({
+        config,
+        routeId: "stripe",
+        route,
+        credentials: { webhook_secret: "s" },
+      }),
     );
     expect(spec.source.config).toMatchObject({
       auth_type: "STRIPE",
@@ -202,8 +241,16 @@ describe("we use Hookdeck's own features rather than only our local copies", () 
     // dry-run diff described a change nobody had asked for.
     const config = base();
     const route = config.routes.stripe!;
-    const a = fingerprint(buildConnectionSpec(routeProvisionSpec({ config, routeId: "stripe", route })));
-    const b = fingerprint(buildConnectionSpec(routeProvisionSpec({ config, routeId: "stripe", route })));
+    const a = fingerprint(
+      buildConnectionSpec(
+        routeProvisionSpec({ config, routeId: "stripe", route }),
+      ),
+    );
+    const b = fingerprint(
+      buildConnectionSpec(
+        routeProvisionSpec({ config, routeId: "stripe", route }),
+      ),
+    );
     expect(a).toBe(b);
   });
 });

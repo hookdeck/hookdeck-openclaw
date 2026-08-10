@@ -47,11 +47,18 @@ export interface VersionCheck {
   message?: string;
 }
 
-export function checkCliVersion(output: string, minimum = MIN_CLI_VERSION): VersionCheck {
+export function checkCliVersion(
+  output: string,
+  minimum = MIN_CLI_VERSION,
+): VersionCheck {
   const version = parseCliVersion(output);
   const floor = parseCliVersion(minimum);
   if (version === undefined || floor === undefined) {
-    return { ok: false, raw: output.trim(), message: `could not parse a version from '${output.trim()}'` };
+    return {
+      ok: false,
+      raw: output.trim(),
+      message: `could not parse a version from '${output.trim()}'`,
+    };
   }
   if (compareVersions(version, floor) < 0) {
     return {
@@ -80,7 +87,9 @@ export function formatVersion(v: ParsedVersion): string {
  * naive gate would check one binary while the tunnel launched another — exactly
  * the failure the gate exists to prevent.
  */
-export function describeShadowing(paths: readonly string[]): string | undefined {
+export function describeShadowing(
+  paths: readonly string[],
+): string | undefined {
   if (paths.length <= 1) return undefined;
   return (
     `multiple hookdeck binaries on PATH; using ${paths[0]}. ` +

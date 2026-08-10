@@ -10,7 +10,10 @@ const silent = { debug: () => {}, info: () => {}, warn: () => {} };
 
 function fakeClient(overrides: Partial<EventRetrier> = {}): EventRetrier {
   return {
-    retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
+    retryEvent: vi.fn(async (eventId: string) => ({
+      ok: true as const,
+      data: { eventId },
+    })),
     ...overrides,
   };
 }
@@ -18,7 +21,12 @@ function fakeClient(overrides: Partial<EventRetrier> = {}): EventRetrier {
 /** Simulates a crash: begin work, never settle, then boot a new instance. */
 async function crashedLedger(eventIds: string[]) {
   const io = createFakeStoreIo();
-  const first = await createLedger({ ttlHours: 168, instanceId: "boot-1", stateDir: STATE_DIR, io });
+  const first = await createLedger({
+    ttlHours: 168,
+    instanceId: "boot-1",
+    stateDir: STATE_DIR,
+    io,
+  });
   for (const id of eventIds) await first.begin(id, 1, { routeId: "stripe" });
   await first.close();
 
@@ -28,7 +36,11 @@ async function crashedLedger(eventIds: string[]) {
     stateDir: STATE_DIR,
     io,
   });
-  const deadLetter = await createDeadLetterLog({ ttlHours: 168, stateDir: STATE_DIR, io });
+  const deadLetter = await createDeadLetterLog({
+    ttlHours: 168,
+    stateDir: STATE_DIR,
+    io,
+  });
   return { ledger, deadLetter, io };
 }
 
@@ -37,16 +49,31 @@ describe("reconcileOrphans", () => {
     const { ledger, deadLetter } = await crashedLedger(["evt_a", "evt_b"]);
     const client = fakeClient();
 
-    const summary = await reconcileOrphans({ ledger, deadLetter, logger: silent, client });
+    const summary = await reconcileOrphans({
+      ledger,
+      deadLetter,
+      logger: silent,
+      client,
+    });
 
-    expect(summary).toMatchObject({ found: 2, retried: 2, failed: 0, skipped: 0 });
+    expect(summary).toMatchObject({
+      found: 2,
+      retried: 2,
+      failed: 0,
+      skipped: 0,
+    });
     expect(client.retryEvent).toHaveBeenCalledTimes(2);
   });
 
   it("settles orphan rows so the next boot does not see them again", async () => {
     // Leaving a row `running` would make it an orphan forever.
     const { ledger, deadLetter } = await crashedLedger(["evt_a"]);
-    await reconcileOrphans({ ledger, deadLetter, logger: silent, client: fakeClient() });
+    await reconcileOrphans({
+      ledger,
+      deadLetter,
+      logger: silent,
+      client: fakeClient(),
+    });
 
     expect(ledger.get("evt_a")?.status).toBe("failed");
     expect(ledger.listOrphans()).toHaveLength(0);
@@ -57,7 +84,12 @@ describe("reconcileOrphans", () => {
     const deadLetter = await createDeadLetterLog({ ttlHours: 168 });
     const client = fakeClient();
 
-    const summary = await reconcileOrphans({ ledger, deadLetter, logger: silent, client });
+    const summary = await reconcileOrphans({
+      ledger,
+      deadLetter,
+      logger: silent,
+      client,
+    });
     expect(summary.found).toBe(0);
     expect(client.retryEvent).not.toHaveBeenCalled();
   });
@@ -65,7 +97,11 @@ describe("reconcileOrphans", () => {
   it("records to the dead-letter log when no API key is configured", async () => {
     const { ledger, deadLetter } = await crashedLedger(["evt_a"]);
 
-    const summary = await reconcileOrphans({ ledger, deadLetter, logger: silent });
+    const summary = await reconcileOrphans({
+      ledger,
+      deadLetter,
+      logger: silent,
+    });
 
     expect(summary).toMatchObject({ found: 1, retried: 0, skipped: 1 });
     const entries = deadLetter.list();
@@ -74,7 +110,11 @@ describe("reconcileOrphans", () => {
   });
 
   it("respects the recovery budget, oldest first", async () => {
-    const { ledger, deadLetter } = await crashedLedger(["evt_a", "evt_b", "evt_c"]);
+    const { ledger, deadLetter } = await crashedLedger([
+      "evt_a",
+      "evt_b",
+      "evt_c",
+    ]);
     const client = fakeClient();
 
     const summary = await reconcileOrphans({
@@ -115,11 +155,21 @@ describe("reconcileOrphans", () => {
     const client = fakeClient({
       retryEvent: vi
         .fn()
-        .mockResolvedValueOnce({ ok: false, status: 404, code: "not_found", message: "gone" })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          code: "not_found",
+          message: "gone",
+        })
         .mockResolvedValueOnce({ ok: true, data: { eventId: "evt_b" } }),
     });
 
-    const summary = await reconcileOrphans({ ledger, deadLetter, logger: silent, client });
+    const summary = await reconcileOrphans({
+      ledger,
+      deadLetter,
+      logger: silent,
+      client,
+    });
 
     expect(summary).toMatchObject({ found: 2, retried: 1, failed: 1 });
     expect(deadLetter.list()[0]).toMatchObject({ code: "recovery_failed" });

@@ -20,7 +20,9 @@ export interface InFlightRegistry {
   release(eventId: string): void;
 }
 
-export function createInFlightRegistry(maxConcurrent: number): InFlightRegistry {
+export function createInFlightRegistry(
+  maxConcurrent: number,
+): InFlightRegistry {
   const active = new Set<string>();
   return {
     get size() {

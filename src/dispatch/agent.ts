@@ -1,6 +1,12 @@
 import type { EventRetrier } from "../hookdeck/client.js";
 import type { Logger } from "../ingress/handler.js";
-import { cancelRetries, deferFor, ok, retryable, accepted } from "../protocol/outcome.js";
+import {
+  cancelRetries,
+  deferFor,
+  ok,
+  retryable,
+  accepted,
+} from "../protocol/outcome.js";
 import { buildPrompt, TRUST_HINT } from "../protocol/template.js";
 import type { DeadLetterLog } from "../store/deadletter.js";
 import type { Ledger } from "../store/ledger.js";
@@ -56,11 +62,20 @@ export interface AgentDispatchOptions {
  * state rather than a bare run id, so it stays inspectable after a restart.
  */
 export interface AgentRunner {
-  start(params: { sessionKey: string; prompt: string; eventId: string; routeId: string }): Promise<
-    { ok: true; handle: string } | { ok: false; retryable: boolean; message: string }
+  start(params: {
+    sessionKey: string;
+    prompt: string;
+    eventId: string;
+    routeId: string;
+  }): Promise<
+    | { ok: true; handle: string }
+    | { ok: false; retryable: boolean; message: string }
   >;
   /** Absent when the transport cannot observe completion. */
-  waitFor?(handle: string, timeoutMs?: number): Promise<{ status: "ok" | "error" | "timeout"; error?: string }>;
+  waitFor?(
+    handle: string,
+    timeoutMs?: number,
+  ): Promise<{ status: "ok" | "error" | "timeout"; error?: string }>;
 }
 
 export interface AgentDispatchDeps {
@@ -97,7 +112,11 @@ export function createAgentDispatcher(
   // mode, which is exactly where it matters most.
   let activeRuns = 0;
 
-  async function settleAfterRun(eventId: string, runId: string, routeId: string): Promise<void> {
+  async function settleAfterRun(
+    eventId: string,
+    runId: string,
+    routeId: string,
+  ): Promise<void> {
     try {
       const result = await deps.runner.waitFor!(runId, BACKGROUND_WAIT_MS);
       if (result.status === "ok") {
@@ -114,7 +133,9 @@ export function createAgentDispatcher(
           deps.logger.warn(
             `agent run failed for ${eventId} (${reason}); asked Hookdeck to redeliver (${attempted}/${options.maxAgentRetries})`,
           );
-          await deps.ledger.settle(eventId, "failed", { agentRetries: attempted });
+          await deps.ledger.settle(eventId, "failed", {
+            agentRetries: attempted,
+          });
           return;
         }
         deps.logger.warn(`could not re-queue ${eventId}: ${retried.message}`);
@@ -122,7 +143,9 @@ export function createAgentDispatcher(
 
       // Out of budget, or no API key. Mark exhausted so a later redelivery is
       // not silently re-run, and record it where an agent can find it.
-      await deps.ledger.settle(eventId, "exhausted", { agentRetries: attempted });
+      await deps.ledger.settle(eventId, "exhausted", {
+        agentRetries: attempted,
+      });
       await deps.deadLetter.record({
         eventId,
         routeId,
@@ -160,7 +183,11 @@ export function createAgentDispatcher(
         // retry accounting below is keyed on the event id.
         return {
           settle: "failed",
-          plan: retryable(400, "no_event_id", "agent dispatch requires an event id"),
+          plan: retryable(
+            400,
+            "no_event_id",
+            "agent dispatch requires an event id",
+          ),
         };
       }
 
@@ -179,9 +206,15 @@ export function createAgentDispatcher(
       const templateCtx = {
         routeId: ctx.routeId,
         payload: ctx.payload,
-        ...(ctx.delivery.sourceName !== undefined ? { source: ctx.delivery.sourceName } : {}),
-        ...(ctx.delivery.eventId !== undefined ? { eventId: ctx.delivery.eventId } : {}),
-        ...(ctx.delivery.requestId !== undefined ? { requestId: ctx.delivery.requestId } : {}),
+        ...(ctx.delivery.sourceName !== undefined
+          ? { source: ctx.delivery.sourceName }
+          : {}),
+        ...(ctx.delivery.eventId !== undefined
+          ? { eventId: ctx.delivery.eventId }
+          : {}),
+        ...(ctx.delivery.requestId !== undefined
+          ? { requestId: ctx.delivery.requestId }
+          : {}),
         ...(ctx.delivery.attemptCount !== undefined
           ? { attemptCount: ctx.delivery.attemptCount }
           : {}),
@@ -193,8 +226,12 @@ export function createAgentDispatcher(
         message = buildPrompt(options.prompt, templateCtx);
         sessionKey = renderSessionKey(options.sessionKey, {
           routeId: ctx.routeId,
-          ...(ctx.delivery.eventId !== undefined ? { eventId: ctx.delivery.eventId } : {}),
-          ...(ctx.delivery.sourceName !== undefined ? { source: ctx.delivery.sourceName } : {}),
+          ...(ctx.delivery.eventId !== undefined
+            ? { eventId: ctx.delivery.eventId }
+            : {}),
+          ...(ctx.delivery.sourceName !== undefined
+            ? { source: ctx.delivery.sourceName }
+            : {}),
         });
       } catch (err) {
         return {
@@ -210,19 +247,32 @@ export function createAgentDispatcher(
       if (sessionKey.length === 0) {
         return {
           settle: "failed",
-          plan: cancelRetries("agent_input_invalid", 422, "sessionKey rendered empty"),
+          plan: cancelRetries(
+            "agent_input_invalid",
+            422,
+            "sessionKey rendered empty",
+          ),
         };
       }
 
       activeRuns += 1;
-      const started = await deps.runner.start({ sessionKey, prompt: message, eventId, routeId: ctx.routeId });
+      const started = await deps.runner.start({
+        sessionKey,
+        prompt: message,
+        eventId,
+        routeId: ctx.routeId,
+      });
       if (!started.ok) {
         activeRuns -= 1;
         // Infrastructure, not input. Keep it retryable and let exponential
         // backoff pace it — a fixed interval would burn the budget.
         return {
           settle: "failed",
-          plan: retryable(started.retryable ? 503 : 500, "agent_start_failed", started.message),
+          plan: retryable(
+            started.retryable ? 503 : 500,
+            "agent_start_failed",
+            started.message,
+          ),
         };
       }
       const runId = started.handle;
@@ -232,23 +282,35 @@ export function createAgentDispatcher(
         // for and no failure to retry on. Hookdeck's job — durable delivery —
         // is done; run durability belongs to the flow record from here.
         activeRuns -= 1;
-        return { settle: "succeeded", plan: accepted("accepted", `run ${runId} started`) };
+        return {
+          settle: "succeeded",
+          plan: accepted("accepted", `run ${runId} started`),
+        };
       }
 
       if (options.ackMode === "async_retry") {
         // The dispatcher owns settling from here: the row must stay `running`
         // until the background run finishes, so a crash mid-run is recoverable.
         void settleAfterRun(eventId, runId, ctx.routeId);
-        return { settle: "deferred", plan: accepted("accepted", `run ${runId} started`) };
+        return {
+          settle: "deferred",
+          plan: accepted("accepted", `run ${runId} started`),
+        };
       }
 
       // sync
       try {
-        const result = await deps.runner.waitFor(runId, options.syncTimeoutSeconds * 1000);
+        const result = await deps.runner.waitFor(
+          runId,
+          options.syncTimeoutSeconds * 1000,
+        );
 
         if (result.status === "ok") {
           activeRuns -= 1;
-          return { settle: "succeeded", plan: ok("dispatched", `run ${runId} completed`) };
+          return {
+            settle: "succeeded",
+            plan: ok("dispatched", `run ${runId} completed`),
+          };
         }
 
         if (result.status === "timeout") {
@@ -257,20 +319,31 @@ export function createAgentDispatcher(
           void settleAfterRun(eventId, runId, ctx.routeId);
           return {
             settle: "deferred",
-            plan: accepted("accepted_timeout", `run ${runId} still running after timeout`),
+            plan: accepted(
+              "accepted_timeout",
+              `run ${runId} still running after timeout`,
+            ),
           };
         }
 
         activeRuns -= 1;
         return {
           settle: "failed",
-          plan: retryable(500, "agent_run_failed", result.error ?? "agent run failed"),
+          plan: retryable(
+            500,
+            "agent_run_failed",
+            result.error ?? "agent run failed",
+          ),
         };
       } catch (err) {
         activeRuns -= 1;
         return {
           settle: "failed",
-          plan: retryable(500, "agent_run_failed", err instanceof Error ? err.message : String(err)),
+          plan: retryable(
+            500,
+            "agent_run_failed",
+            err instanceof Error ? err.message : String(err),
+          ),
         };
       }
     },

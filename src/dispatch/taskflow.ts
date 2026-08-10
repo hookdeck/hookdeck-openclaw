@@ -1,6 +1,19 @@
-import { parseTaskFlowEnvelope, isWriteAction, type TaskFlowEnvelope } from "../protocol/envelope.js";
-import { accepted, cancelRetries, deferFor, ok, retryable } from "../protocol/outcome.js";
-import type { BoundTaskFlowRuntime, TaskFlowMutationResult } from "../plugin/host-api.js";
+import {
+  parseTaskFlowEnvelope,
+  isWriteAction,
+  type TaskFlowEnvelope,
+} from "../protocol/envelope.js";
+import {
+  accepted,
+  cancelRetries,
+  deferFor,
+  ok,
+  retryable,
+} from "../protocol/outcome.js";
+import type {
+  BoundTaskFlowRuntime,
+  TaskFlowMutationResult,
+} from "../plugin/host-api.js";
 import type { DispatchContext, DispatchOutcome, Dispatcher } from "./types.js";
 
 /**
@@ -31,18 +44,27 @@ export interface TaskFlowDispatchOptions {
   hostConfig?: unknown;
 }
 
-function mapMutation(result: TaskFlowMutationResult, action: string): DispatchOutcome {
+function mapMutation(
+  result: TaskFlowMutationResult,
+  action: string,
+): DispatchOutcome {
   if (result.applied) {
     return {
       settle: "succeeded",
-      plan: ok("dispatched", `${action} applied (revision ${result.flow.revision})`),
+      plan: ok(
+        "dispatched",
+        `${action} applied (revision ${result.flow.revision})`,
+      ),
     };
   }
 
   switch (result.code) {
     case "not_found":
       // Retryable: the flow may not exist yet.
-      return { settle: "failed", plan: retryable(404, "flow_not_found", `no flow for ${action}`) };
+      return {
+        settle: "failed",
+        plan: retryable(404, "flow_not_found", `no flow for ${action}`),
+      };
 
     case "revision_conflict":
       return {
@@ -51,7 +73,9 @@ function mapMutation(result: TaskFlowMutationResult, action: string): DispatchOu
           "flow_revision_conflict",
           409,
           `expectedRevision is stale${
-            result.current ? `; current revision is ${result.current.revision}` : ""
+            result.current
+              ? `; current revision is ${result.current.revision}`
+              : ""
           }. Re-read the flow and send a corrected revision — retrying this envelope cannot succeed.`,
         ),
       };
@@ -59,17 +83,28 @@ function mapMutation(result: TaskFlowMutationResult, action: string): DispatchOu
     case "not_managed":
       return {
         settle: "failed",
-        plan: cancelRetries("flow_not_managed", 409, "flow is not managed by this controller"),
+        plan: cancelRetries(
+          "flow_not_managed",
+          409,
+          "flow is not managed by this controller",
+        ),
       };
 
     case "persist_failed":
       // Genuinely transient — disk or state pressure. This is what retries are for.
-      return { settle: "failed", plan: deferFor(503, "persist_failed", 15, "state write failed") };
+      return {
+        settle: "failed",
+        plan: deferFor(503, "persist_failed", 15, "state write failed"),
+      };
 
     default:
       return {
         settle: "failed",
-        plan: retryable(409, "mutation_rejected", `${action} rejected: ${String(result.code)}`),
+        plan: retryable(
+          409,
+          "mutation_rejected",
+          `${action} rejected: ${String(result.code)}`,
+        ),
       };
   }
 }
@@ -115,19 +150,33 @@ export function createTaskFlowDispatcher(
         // Reads. Absent flows are 200 with a null result, matching the built-in
         // plugin: "not found" is an answer, not a failure.
         case "get_flow":
-          return { settle: "succeeded", plan: ok("dispatched", describe(flows.get(envelope.flowId))) };
+          return {
+            settle: "succeeded",
+            plan: ok("dispatched", describe(flows.get(envelope.flowId))),
+          };
         case "list_flows":
-          return { settle: "succeeded", plan: ok("dispatched", `${flows.list().length} flow(s)`) };
+          return {
+            settle: "succeeded",
+            plan: ok("dispatched", `${flows.list().length} flow(s)`),
+          };
         case "find_latest_flow":
-          return { settle: "succeeded", plan: ok("dispatched", describe(flows.findLatest())) };
+          return {
+            settle: "succeeded",
+            plan: ok("dispatched", describe(flows.findLatest())),
+          };
         case "resolve_flow":
-          return { settle: "succeeded", plan: ok("dispatched", describe(flows.resolve(envelope.token))) };
+          return {
+            settle: "succeeded",
+            plan: ok("dispatched", describe(flows.resolve(envelope.token))),
+          };
         case "get_task_summary":
           return {
             settle: "succeeded",
             plan: ok(
               "dispatched",
-              flows.getTaskSummary(envelope.flowId) === undefined ? "no summary" : "summary",
+              flows.getTaskSummary(envelope.flowId) === undefined
+                ? "no summary"
+                : "summary",
             ),
           };
 
@@ -135,16 +184,28 @@ export function createTaskFlowDispatcher(
           const flow = flows.tryCreateManaged({
             controllerId: envelope.controllerId ?? options.controllerId,
             goal: envelope.goal,
-            ...(envelope.currentStep !== undefined ? { currentStep: envelope.currentStep } : {}),
-            ...(envelope.stateJson !== undefined ? { stateJson: envelope.stateJson } : {}),
+            ...(envelope.currentStep !== undefined
+              ? { currentStep: envelope.currentStep }
+              : {}),
+            ...(envelope.stateJson !== undefined
+              ? { stateJson: envelope.stateJson }
+              : {}),
           });
           if (flow === null) {
             return {
               settle: "failed",
-              plan: deferFor(503, "create_rejected", 15, "flow could not be persisted"),
+              plan: deferFor(
+                503,
+                "create_rejected",
+                15,
+                "flow could not be persisted",
+              ),
             };
           }
-          return { settle: "succeeded", plan: ok("dispatched", `created flow ${flow.flowId}`) };
+          return {
+            settle: "succeeded",
+            plan: ok("dispatched", `created flow ${flow.flowId}`),
+          };
         }
 
         case "set_waiting":
@@ -152,9 +213,15 @@ export function createTaskFlowDispatcher(
             flows.setWaiting({
               flowId: envelope.flowId,
               expectedRevision: envelope.expectedRevision,
-              ...(envelope.currentStep !== undefined ? { currentStep: envelope.currentStep } : {}),
-              ...(envelope.stateJson !== undefined ? { stateJson: envelope.stateJson } : {}),
-              ...(envelope.waitJson !== undefined ? { waitJson: envelope.waitJson } : {}),
+              ...(envelope.currentStep !== undefined
+                ? { currentStep: envelope.currentStep }
+                : {}),
+              ...(envelope.stateJson !== undefined
+                ? { stateJson: envelope.stateJson }
+                : {}),
+              ...(envelope.waitJson !== undefined
+                ? { waitJson: envelope.waitJson }
+                : {}),
             }),
             envelope.action,
           );
@@ -164,9 +231,15 @@ export function createTaskFlowDispatcher(
             flows.resume({
               flowId: envelope.flowId,
               expectedRevision: envelope.expectedRevision,
-              ...(envelope.status !== undefined ? { status: envelope.status } : {}),
-              ...(envelope.currentStep !== undefined ? { currentStep: envelope.currentStep } : {}),
-              ...(envelope.stateJson !== undefined ? { stateJson: envelope.stateJson } : {}),
+              ...(envelope.status !== undefined
+                ? { status: envelope.status }
+                : {}),
+              ...(envelope.currentStep !== undefined
+                ? { currentStep: envelope.currentStep }
+                : {}),
+              ...(envelope.stateJson !== undefined
+                ? { stateJson: envelope.stateJson }
+                : {}),
             }),
             envelope.action,
           );
@@ -176,7 +249,9 @@ export function createTaskFlowDispatcher(
             flows.finish({
               flowId: envelope.flowId,
               expectedRevision: envelope.expectedRevision,
-              ...(envelope.stateJson !== undefined ? { stateJson: envelope.stateJson } : {}),
+              ...(envelope.stateJson !== undefined
+                ? { stateJson: envelope.stateJson }
+                : {}),
             }),
             envelope.action,
           );
@@ -186,7 +261,9 @@ export function createTaskFlowDispatcher(
             flows.fail({
               flowId: envelope.flowId,
               expectedRevision: envelope.expectedRevision,
-              ...(envelope.stateJson !== undefined ? { stateJson: envelope.stateJson } : {}),
+              ...(envelope.stateJson !== undefined
+                ? { stateJson: envelope.stateJson }
+                : {}),
               ...(envelope.blockedSummary !== undefined
                 ? { blockedSummary: envelope.blockedSummary }
                 : {}),
@@ -209,19 +286,32 @@ export function createTaskFlowDispatcher(
             cfg: options.hostConfig as never,
           });
           if (result.cancelled) {
-            return { settle: "succeeded", plan: ok("dispatched", "flow cancelled") };
+            return {
+              settle: "succeeded",
+              plan: ok("dispatched", "flow cancelled"),
+            };
           }
           if (/still active|child tasks/i.test(result.reason ?? "")) {
             // Accepted, work continues, no retry wanted — mirrors the built-in
             // plugin's one 2xx-but-incomplete case.
-            return { settle: "succeeded", plan: accepted("cancel_pending", result.reason) };
+            return {
+              settle: "succeeded",
+              plan: accepted("cancel_pending", result.reason),
+            };
           }
           if (/not found/i.test(result.reason ?? "")) {
-            return { settle: "failed", plan: retryable(404, "flow_not_found", result.reason) };
+            return {
+              settle: "failed",
+              plan: retryable(404, "flow_not_found", result.reason),
+            };
           }
           return {
             settle: "failed",
-            plan: retryable(409, "cancel_rejected", result.reason ?? "cancel rejected"),
+            plan: retryable(
+              409,
+              "cancel_rejected",
+              result.reason ?? "cancel rejected",
+            ),
           };
         }
 
@@ -235,14 +325,24 @@ export function createTaskFlowDispatcher(
               : {}),
           });
           if (result.created) {
-            return { settle: "succeeded", plan: ok("dispatched", "task created") };
+            return {
+              settle: "succeeded",
+              plan: ok("dispatched", "task created"),
+            };
           }
           if (!result.found) {
-            return { settle: "failed", plan: retryable(404, "flow_not_found", result.reason) };
+            return {
+              settle: "failed",
+              plan: retryable(404, "flow_not_found", result.reason),
+            };
           }
           return {
             settle: "failed",
-            plan: retryable(409, "task_not_created", result.reason ?? "task not created"),
+            plan: retryable(
+              409,
+              "task_not_created",
+              result.reason ?? "task not created",
+            ),
           };
         }
 
