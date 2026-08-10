@@ -232,9 +232,28 @@ export async function handleDelivery(
     }
 
     // 10. Parse the payload. Malformed JSON will never become valid.
+    //
+    // Node differs from most runtimes here in a way that matters:
+    // `Buffer.toString("utf8")` never throws — it substitutes U+FFFD for
+    // invalid bytes. Invalid bytes outside a string produce a SyntaxError and
+    // are caught below, but invalid bytes INSIDE a string value parse happily,
+    // silently corrupting the text. That text goes on to be rendered into a
+    // prompt, so accepting it is worse than rejecting it. RFC 8259 §8.1
+    // requires JSON exchanged between systems to be UTF-8, so a body that
+    // fails to round-trip is malformed by definition.
+    const decoded = rawBody.toString("utf8");
+    if (!Buffer.from(decoded, "utf8").equals(rawBody)) {
+      return cancel(
+        "malformed_json",
+        400,
+        "body is not valid UTF-8; JSON must be UTF-8 encoded (RFC 8259 §8.1)",
+        routeId,
+      );
+    }
+
     let payload: unknown;
     try {
-      payload = JSON.parse(rawBody.toString("utf8"));
+      payload = JSON.parse(decoded);
     } catch (err) {
       return cancel(
         "malformed_json",

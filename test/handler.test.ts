@@ -330,6 +330,54 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
     expect(cancels).toEqual(["malformed_json"]);
   });
 
+  describe("non-UTF-8 bodies", () => {
+    function rawRequest(bytes: Buffer): IncomingDelivery {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        "x-hookdeck-signature": computeHookdeckSignature(bytes, SECRET),
+        "x-hookdeck-eventid": "evt_bytes",
+        "x-hookdeck-attempt-count": "1",
+      };
+      return {
+        method: "POST",
+        url: "/hookdeck/stripe",
+        headers,
+        stream: Object.assign(Readable.from([bytes]), { headers }),
+      };
+    }
+
+    it("rejects invalid UTF-8 inside a string rather than silently corrupting it", async () => {
+      // Node's Buffer.toString('utf8') never throws — it substitutes U+FFFD, so
+      // this parses "successfully" into mangled text. That text is destined for
+      // a prompt, so accepting it is worse than rejecting it.
+      const bytes = Buffer.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0xfe, 0x22, 0x7d]);
+      expect(() => JSON.parse(bytes.toString("utf8"))).not.toThrow();
+
+      const { deps, dispatch } = harness();
+      const result = await handleDelivery(deps, rawRequest(bytes));
+
+      expect(result.plan.status).toBe(400);
+      expect(result.plan.code).toBe("malformed_json");
+      expect(result.plan.deadLetter).toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("rejects invalid UTF-8 outside a string too", async () => {
+      const { deps } = harness();
+      const result = await handleDelivery(deps, rawRequest(Buffer.from([0xff, 0xfe, 0x7b, 0x7d])));
+      expect(result.plan.status).toBe(400);
+      expect(result.plan.code).toBe("malformed_json");
+    });
+
+    it("still accepts legitimate multi-byte UTF-8", async () => {
+      const { deps, dispatch } = harness();
+      const bytes = Buffer.from(JSON.stringify({ n: "café ✓ 日本語 🚀" }), "utf8");
+      const result = await handleDelivery(deps, rawRequest(bytes));
+      expect(result.plan.status).toBe(200);
+      expect(dispatch).toHaveBeenCalledOnce();
+    });
+  });
+
   it("returns a retryable 503 when dispatch fails transiently", async () => {
     const { deps, ledger } = harness({
       dispatch: async () => ({ ok: false, retryable: true, message: "queue unavailable" }),
