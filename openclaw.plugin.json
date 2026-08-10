@@ -67,6 +67,42 @@
           }
         ]
       },
+      "apiKey": {
+        "description": "Hookdeck API key. Optional \u2014 without it the plugin runs ingress-only: verification, deduplication and dispatch all work, but work interrupted by a crash cannot be re-queued.",
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "env",
+                  "file",
+                  "exec"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        ]
+      },
       "ingress": {
         "type": "object",
         "additionalProperties": false,
@@ -103,6 +139,42 @@
             "maximum": 720,
             "default": 168,
             "description": "Ledger retention. Must exceed Hookdeck's one-week automatic retry ceiling."
+          }
+        }
+      },
+      "storage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Persist the ledger and dead-letter log under the plugin state directory. Off means memory-only: exactly-once within a process, at-least-once across a restart, and no crash recovery."
+          },
+          "deadLetterMaxEntries": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 500,
+            "description": "Dead-letter entries retained before the oldest are dropped."
+          }
+        }
+      },
+      "recovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "On startup, re-queue work interrupted by a crash by calling POST /events/{id}/retry for every running ledger row owned by a dead process instance. Requires apiKey."
+          },
+          "maxEvents": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 50,
+            "description": "Caps a crash loop from storming the Hookdeck API. Oldest events are recovered first."
           }
         }
       },

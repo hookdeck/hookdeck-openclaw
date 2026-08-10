@@ -12,7 +12,8 @@ import {
   type ResponseSink,
 } from "../src/ingress/handler.js";
 import { computeHookdeckSignature } from "../src/protocol/signature.js";
-import { createInFlightRegistry, createMemoryLedger } from "../src/store/memory-ledger.js";
+import { createInFlightRegistry } from "../src/store/in-flight.js";
+import { createMemoryLedger } from "../src/store/ledger.js";
 
 const SECRET = "whsec_test";
 
@@ -40,7 +41,7 @@ function harness(options: HarnessOptions = {}) {
     options.dispatch ?? (async () => ({ ok: true })),
   );
   const dispatcher: Dispatcher = { dispatch };
-  const ledger = createMemoryLedger(config.dedupe.ttlHours);
+  const ledger = createMemoryLedger({ ttlHours: config.dedupe.ttlHours, instanceId: "test" });
   const inFlight = createInFlightRegistry(config.maxConcurrent);
   const cancels: string[] = [];
 

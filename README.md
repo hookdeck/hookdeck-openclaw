@@ -2,7 +2,7 @@
 
 Reliable webhooks for OpenClaw. Puts the [Hookdeck](https://hookdeck.com) Event Gateway in front of your OpenClaw Gateway so inbound webhooks are verified, deduplicated and retryable.
 
-> **Status: M1.** Signature verification, deduplication and wake dispatch work end to end. Connection provisioning, CLI supervision, TaskFlow and agent dispatch, durable storage and the operator tools are not here yet — see [Limitations](#limitations). Nothing below describes behaviour that isn't implemented.
+> **Status: M2.** Signature verification, durable deduplication, crash recovery, dead-lettering and wake dispatch work end to end. Connection provisioning, CLI supervision, TaskFlow and agent dispatch, and the operator tools are not here yet — see [Limitations](#limitations). Nothing below describes behaviour that isn't implemented.
 
 ## Why
 
@@ -86,6 +86,11 @@ You do not need to configure destination auth either. CLI destinations default t
 |---|---|---|
 | `headerPrefix` | `x-hookdeck` | Hookdeck's header prefix is white-labelable per project. Set it if yours differs. |
 | `signingSecret` | — | Inline string or a secretRef `{source, provider, id}`. Routes may override. Re-resolved on every request, so rotation needs no restart. |
+| `apiKey` | — | Optional. Only used to re-queue interrupted work. Without it the plugin runs ingress-only. |
+| `storage.enabled` | `true` | Persist the ledger and dead-letter log. Off means memory-only — see [Durability](#durability-and-recovery). |
+| `storage.deadLetterMaxEntries` | `500` | Dead-letter entries kept before the oldest are dropped. |
+| `recovery.enabled` | `true` | Re-queue work interrupted by a crash on the next start. Needs `apiKey`. |
+| `recovery.maxEvents` | `50` | Caps a crash loop from storming the API. Oldest events recovered first. |
 | `ingress.basePath` | `/hookdeck` | Gateway route prefix. May not be `/`. |
 | `maxConcurrent` | `4` | Local admission control. In CLI transport this is the **only** limit — CLI destinations carry no `rate_limit` field. |
 | `busyRetryAfterSeconds` | `10` | `Retry-After` sent when deferring at capacity. |
@@ -135,6 +140,24 @@ Keyed on `x-hookdeck-eventid`, but the rule is about the attempt number, not ide
 
 This matters because Hookdeck redelivers a *failed* event under the **same** event id. Deduplicating on identity alone would look idempotent while quietly never retrying anything.
 
+## Durability and recovery
+
+The ledger is an append-only JSONL file under the plugin's state directory, compacted atomically (write, fsync, rename) and on shutdown. It survives a restart, so a redelivery that arrives after the Gateway has bounced is still recognised as a duplicate rather than re-running the work.
+
+**If a write fails, persistence disables itself permanently for that process, logs once, and handling continues in memory.** A broken disk degrades the guarantee from exactly-once to at-least-once; it must never wedge webhook handling. `storage.enabled: false` chooses the same trade deliberately.
+
+### Crash recovery
+
+A `running` row owned by a process instance that no longer exists is an orphan by definition — the process that owned it is gone, so its outcome is unknown. On startup each one is settled, dead-lettered, and handed back to Hookdeck with `POST /events/{id}/retry` so the normal pipeline re-runs it.
+
+This is the payoff of putting an event gateway in front: **Hookdeck is the durable work queue, so the plugin never needs to build one.** That matters concretely, because OpenClaw's own durable queue (`openChannelIngressQueue`) is gated to bundled and trusted-official plugins and unavailable to community plugins like this one.
+
+Manual retry works on events Hookdeck already considers `SUCCESSFUL` — confirmed against a live project — which is what makes the recovery call legitimate rather than a hack.
+
+> **Recovery can re-run an event whose dispatch finished in the instant before the crash.** That is the at-least-once contract this design already assumes rather than a new hazard, but it is the kind of thing discovered via a duplicate side effect at 2am. Make webhook-triggered work idempotent. Set `recovery.enabled: false` to opt out; orphans are then recorded but never re-run.
+
+Without `apiKey`, orphans are still detected, settled and dead-lettered — they just aren't re-queued, and the startup log says so.
+
 ### Retry cancellation
 
 `safety.allowRetryCancel` lets the plugin answer `Retry-After: -1` on permanently-invalid input — malformed JSON, a body that will never fit — which tells Hookdeck to stop retrying instead of burning all 50 attempts on something that cannot succeed.
@@ -153,9 +176,8 @@ Signature headers and resolved secrets are redacted from logs.
 
 ## Limitations
 
-M1 is the ingress core. Not yet implemented:
+Not yet implemented:
 
-- **The ledger is in-memory.** A Gateway restart loses it, so work can re-run once. Durable JSONL storage with atomic compaction is next.
 - **Only `wake` dispatch.** TaskFlow actions and agent turns come later.
 - **No connection provisioning.** Create the source, destination and connection in Hookdeck yourself, and set the retry rule as above.
 - **No CLI supervision or catch-up.** Run `hookdeck listen` yourself. Note that a CLI destination is not durable when disconnected: events become `CLI_DISCONNECTED` ignored events and the request is discarded. A clean `Ctrl+C` is *worse* than a crash, because it forfeits the server's ~2-minute grace window.
@@ -170,7 +192,7 @@ npm test
 npm run typecheck
 ```
 
-156 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, and `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies.
+211 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 

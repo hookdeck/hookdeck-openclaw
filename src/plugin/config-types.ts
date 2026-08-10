@@ -57,11 +57,40 @@ export interface SafetyConfig {
   allowRetryCancel: boolean;
 }
 
+export interface RecoveryConfig {
+  /**
+   * Re-queue work interrupted by a crash or shutdown, by calling
+   * `POST /events/{id}/retry` for every `running` ledger row owned by a dead
+   * process instance. Requires `apiKey`; without one the rows are recorded to
+   * the dead-letter log but not re-run.
+   */
+  enabled: boolean;
+  /** Caps a crash loop from storming the Hookdeck API. */
+  maxEvents: number;
+}
+
+export interface StorageConfig {
+  /**
+   * Persist the ledger and dead-letter log under the plugin's state directory.
+   * With this off, both are memory-only: still exactly-once within a process,
+   * but at-least-once across a restart, and no crash recovery.
+   */
+  enabled: boolean;
+  /** Dead-letter entries retained before the oldest are dropped. */
+  deadLetterMaxEntries: number;
+}
+
 export interface HookdeckPluginConfig {
   /** White-labelable per Hookdeck project. Read, never hardcoded. */
   headerPrefix: string;
   /** Default signing secret; routes may override. */
   signingSecret?: SecretInput;
+  /**
+   * Hookdeck API key. Optional — without it the plugin runs ingress-only:
+   * verification, deduplication and dispatch all work, but interrupted work
+   * cannot be re-queued.
+   */
+  apiKey?: SecretInput;
   ingress: {
     /** Route prefix registered on the Gateway. */
     basePath: string;
@@ -73,6 +102,8 @@ export interface HookdeckPluginConfig {
   dedupe: {
     ttlHours: number;
   };
+  storage: StorageConfig;
+  recovery: RecoveryConfig;
   safety: SafetyConfig;
   routes: Record<string, RouteConfig>;
 }

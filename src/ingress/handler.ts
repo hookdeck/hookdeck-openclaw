@@ -4,6 +4,7 @@ import { decideAdmission } from "../protocol/admission.js";
 import { parseHookdeckDelivery, type HookdeckDelivery } from "../protocol/delivery.js";
 import {
   cancelRetries,
+  isRetryableStatus,
   ok,
   planToBody,
   renderRetryAfterHeader,
@@ -13,7 +14,9 @@ import {
 } from "../protocol/outcome.js";
 import { verifyHookdeckSignature } from "../protocol/signature.js";
 import type { Dispatcher } from "../dispatch/wake.js";
-import type { InFlightRegistry, Ledger } from "../store/memory-ledger.js";
+import type { DeadLetterLog } from "../store/deadletter.js";
+import type { InFlightRegistry } from "../store/in-flight.js";
+import type { Ledger } from "../store/ledger.js";
 import {
   readRawBody,
   DEFAULT_BODY_TIMEOUT_MS,
@@ -35,6 +38,7 @@ export interface HandlerDeps {
   ledger: Ledger;
   inFlight: InFlightRegistry;
   logger: Logger;
+  deadLetter?: DeadLetterLog | undefined;
   now?(): number;
   maxBodyBytes?: number;
   bodyTimeoutMs?: number;
@@ -74,7 +78,7 @@ function pathnameOf(url: string | undefined): string {
  * The ordered request pipeline. Every status code is chosen for what Hookdeck
  * does next, not for HTTP tidiness — see `src/protocol/outcome.ts`.
  *
- * Two orderings here are load-bearing and easy to get wrong:
+ * Two orderings are load-bearing and easy to get wrong:
  *
  *  - Signature verification happens BEFORE admission control, so a flood of
  *    unsigned junk cannot consume delivery capacity.
@@ -82,22 +86,27 @@ function pathnameOf(url: string | undefined): string {
  *    a deferred event: recording it would make Hookdeck's redelivery look like a
  *    duplicate, and the event would vanish.
  */
-export async function handleDelivery(
+async function runPipeline(
   deps: HandlerDeps,
   req: IncomingDelivery,
 ): Promise<HandledDelivery> {
   const { config, logger } = deps;
-  const now = deps.now ?? Date.now;
 
   const cancel = (
     reason: Parameters<typeof cancelRetries>[0],
     status: number,
     message: string,
     routeId?: string,
+    delivery?: HookdeckDelivery,
   ): HandledDelivery => {
     deps.onRetryCancel?.(reason, routeId);
     logger.warn(`retry-cancel [${reason}] ${message}`);
-    return { plan: cancelRetries(reason, status, message), extra: {}, ...(routeId ? { routeId } : {}) };
+    return {
+      plan: cancelRetries(reason, status, message),
+      extra: {},
+      ...(routeId !== undefined ? { routeId } : {}),
+      ...(delivery !== undefined ? { delivery } : {}),
+    };
   };
 
   // 1. Method.
@@ -105,8 +114,7 @@ export async function handleDelivery(
     return cancel("bad_method", 405, `expected POST, got ${req.method ?? "(none)"}`);
   }
 
-  // 2. Route match. A prefix route is registered, so anything unmatched under
-  //    the base path is a misconfiguration rather than transient.
+  // 2. Route match.
   const pathname = pathnameOf(req.url);
   const matched = matchRoute(config, pathname);
   if (matched === undefined) {
@@ -128,7 +136,6 @@ export async function handleDelivery(
     if (bodyResult.reason === "too_large") {
       return cancel("too_large", 413, "request body exceeds limit", routeId);
     }
-    // A timeout or a dropped connection is transient; keep it retryable.
     return {
       plan: retryable(408, "body_read_failed", `could not read body: ${bodyResult.reason}`),
       extra: {},
@@ -137,8 +144,8 @@ export async function handleDelivery(
   }
   const rawBody = bodyResult.body;
 
-  // 5. Signing secret. Absent is a failure, never a bypass — and it is a
-  //    config problem, so it must stay retryable.
+  // 5. Signing secret. Absent is a failure, never a bypass — and it is a config
+  //    problem, so it must stay retryable.
   const secret = await deps.resolveSigningSecret(routeId, route);
   if (!secret) {
     logger.warn(`route '${routeId}': no signing secret resolved; rejecting with 503`);
@@ -169,10 +176,12 @@ export async function handleDelivery(
   });
   if (!verification.valid) {
     logger.warn(`route '${routeId}': signature verification failed`);
-    // Left retryable on purpose: an in-flight rotation self-heals on the next
-    // attempt because we re-resolve the secret per request, and a spoofer's
-    // retries cost us nothing since we reject before doing any work.
-    return { plan: retryable(401, "invalid_signature", "signature verification failed"), extra: {}, routeId, delivery };
+    return {
+      plan: retryable(401, "invalid_signature", "signature verification failed"),
+      extra: {},
+      routeId,
+      delivery,
+    };
   }
   if (verification.matchedSlot === 1) {
     logger.info(`route '${routeId}': signature matched rotation slot; finish the secret roll`);
@@ -180,21 +189,17 @@ export async function handleDelivery(
 
   const eventId = delivery.eventId;
   if (eventId === undefined) {
-    // Without an identity we cannot deduplicate, and running unbounded
-    // duplicates of agent work is worse than refusing.
     return cancel(
       "not_hookdeck",
       400,
       `no '${config.headerPrefix}-eventid' or 'idempotency-key' header; cannot deduplicate`,
       routeId,
+      delivery,
     );
   }
 
   // 8. Admission control. BEFORE any ledger write.
   if (deps.inFlight.has(eventId)) {
-    // The same event is already being dispatched. Answering 2xx would retire
-    // the retry, and if the in-flight attempt then failed we would have
-    // silently dropped the event.
     return {
       plan: retryAfter(503, "in_flight", 5, "this event is already being processed"),
       extra: {},
@@ -231,16 +236,16 @@ export async function handleDelivery(
       };
     }
 
-    // 10. Parse the payload. Malformed JSON will never become valid.
+    // 10. Decode and parse.
     //
-    // Node differs from most runtimes here in a way that matters:
+    // Node differs from most runtimes in a way that matters:
     // `Buffer.toString("utf8")` never throws — it substitutes U+FFFD for
     // invalid bytes. Invalid bytes outside a string produce a SyntaxError and
     // are caught below, but invalid bytes INSIDE a string value parse happily,
-    // silently corrupting the text. That text goes on to be rendered into a
-    // prompt, so accepting it is worse than rejecting it. RFC 8259 §8.1
-    // requires JSON exchanged between systems to be UTF-8, so a body that
-    // fails to round-trip is malformed by definition.
+    // silently corrupting the text. That text is rendered into a prompt, so
+    // accepting it is worse than rejecting it. RFC 8259 §8.1 requires JSON
+    // exchanged between systems to be UTF-8, so a body that fails to round-trip
+    // is malformed by definition.
     const decoded = rawBody.toString("utf8");
     if (!Buffer.from(decoded, "utf8").equals(rawBody)) {
       return cancel(
@@ -248,6 +253,7 @@ export async function handleDelivery(
         400,
         "body is not valid UTF-8; JSON must be UTF-8 encoded (RFC 8259 §8.1)",
         routeId,
+        delivery,
       );
     }
 
@@ -260,17 +266,19 @@ export async function handleDelivery(
         400,
         err instanceof Error ? err.message : "invalid JSON",
         routeId,
+        delivery,
       );
     }
 
-    // 11. Dispatch, bracketed by ledger writes.
-    deps.ledger.begin(eventId, delivery.attemptCount ?? 1, now());
+    // 11. Dispatch, bracketed by ledger writes. `begin` is awaited: it is the
+    //     boundary before which we must not acknowledge anything.
+    await deps.ledger.begin(eventId, delivery.attemptCount ?? 1, { routeId });
     const result = await deps
       .dispatcherFor(routeId, route)
       .dispatch({ routeId, delivery, payload });
 
     if (result.ok) {
-      deps.ledger.settle(eventId, "succeeded", now());
+      await deps.ledger.settle(eventId, "succeeded");
       return {
         plan: ok("dispatched", result.detail),
         extra: { eventId },
@@ -279,14 +287,7 @@ export async function handleDelivery(
       };
     }
 
-    deps.ledger.settle(eventId, "failed", now());
-    if (delivery.isLastAutomaticAttempt) {
-      // Do NOT flip this to 2xx to keep the dashboard green: the failure is
-      // what opens a Hookdeck Issue, and the Issue is the operator's alert.
-      logger.warn(
-        `route '${routeId}': final automatic attempt for ${eventId} failed — ${result.message}`,
-      );
-    }
+    await deps.ledger.settle(eventId, "failed");
     return {
       plan: result.retryable
         ? retryAfter(503, "dispatch_failed", 15, result.message)
@@ -297,6 +298,54 @@ export async function handleDelivery(
     };
   } finally {
     deps.inFlight.release(eventId);
+  }
+}
+
+export async function handleDelivery(
+  deps: HandlerDeps,
+  req: IncomingDelivery,
+): Promise<HandledDelivery> {
+  const handled = await runPipeline(deps, req);
+  await recordDeadLetter(deps, handled);
+  return handled;
+}
+
+/**
+ * Dead-letters anything Hookdeck will not retry again — either because we told
+ * it not to, or because this was its last automatic attempt.
+ *
+ * The last-attempt case deliberately keeps its failure status rather than being
+ * flipped to 2xx to keep the dashboard green: the failure is what opens a
+ * Hookdeck Issue, and the Issue is the operator's alert. This record is the
+ * local copy an agent can read without an API call.
+ */
+async function recordDeadLetter(deps: HandlerDeps, handled: HandledDelivery): Promise<void> {
+  const log = deps.deadLetter;
+  if (log === undefined) return;
+
+  const { plan, delivery, routeId } = handled;
+  const cancelled = plan.retry.kind === "cancel";
+  const lastAttemptFailure =
+    delivery?.isLastAutomaticAttempt === true && isRetryableStatus(plan.status);
+
+  if (!cancelled && !lastAttemptFailure) return;
+
+  try {
+    await log.record({
+      ...(delivery?.eventId !== undefined ? { eventId: delivery.eventId } : {}),
+      ...(delivery?.requestId !== undefined ? { requestId: delivery.requestId } : {}),
+      ...(routeId !== undefined ? { routeId } : {}),
+      code: plan.code,
+      reason: plan.message ?? plan.code,
+      // Reflects what we will actually put on the wire, not merely what the
+      // plan asked for: with the kill switch off, no cancellation is sent.
+      retriesCancelled: cancelled && deps.config.safety.allowRetryCancel,
+      lastAttempt: delivery?.isLastAutomaticAttempt ?? false,
+      ...(delivery?.attemptCount !== undefined ? { attemptCount: delivery.attemptCount } : {}),
+    });
+  } catch (err) {
+    // Dead-lettering is a diagnostic, never a gate on the response.
+    deps.logger.warn(`could not record dead letter: ${err instanceof Error ? err.message : err}`);
   }
 }
 

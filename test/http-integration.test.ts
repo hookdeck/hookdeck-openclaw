@@ -6,7 +6,8 @@ import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
 import type { DispatchContext, DispatchResult } from "../src/dispatch/wake.js";
 import { handleDelivery, writePlan, type HandlerDeps } from "../src/ingress/handler.js";
 import { computeHookdeckSignature } from "../src/protocol/signature.js";
-import { createInFlightRegistry, createMemoryLedger } from "../src/store/memory-ledger.js";
+import { createInFlightRegistry } from "../src/store/in-flight.js";
+import { createMemoryLedger } from "../src/store/ledger.js";
 
 /**
  * End-to-end over a real socket.
@@ -37,7 +38,7 @@ const dispatch = vi.fn<(ctx: DispatchContext) => Promise<DispatchResult>>(async 
 beforeAll(async () => {
   const deps: HandlerDeps = {
     config,
-    ledger: createMemoryLedger(config.dedupe.ttlHours),
+    ledger: createMemoryLedger({ ttlHours: config.dedupe.ttlHours, instanceId: "test" }),
     inFlight: createInFlightRegistry(config.maxConcurrent),
     logger: { debug: () => {}, info: () => {}, warn: () => {} },
     dispatcherFor: () => ({ dispatch }),

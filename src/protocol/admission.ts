@@ -26,6 +26,14 @@ export interface LedgerRow {
   runCount: number;
   status: LedgerStatus;
   updatedAt: number;
+  /**
+   * Which process instance owns this row. A `running` row whose owner is not
+   * the current instance is an orphan by definition — the process that owned it
+   * is gone — which is what makes boot reconciliation a rule rather than a
+   * judgement call.
+   */
+  owner?: string;
+  routeId?: string;
 }
 
 export type AdmissionDecision =

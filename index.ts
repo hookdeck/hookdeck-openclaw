@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 import { parseHookdeckConfig } from "./src/plugin/config-parse.js";
@@ -6,11 +8,22 @@ import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "./src/plug
 import { createHostSecretResolver } from "./src/plugin/host-secrets.js";
 import { resolveSecret, UnresolvedSecretError } from "./src/plugin/secrets.js";
 import { createWakeDispatcher, type Dispatcher } from "./src/dispatch/wake.js";
+import { createHookdeckClient } from "./src/hookdeck/client.js";
 import { handleDelivery, writePlan, type Logger } from "./src/ingress/handler.js";
 import { retryAfter } from "./src/protocol/outcome.js";
-import { createInFlightRegistry, createMemoryLedger } from "./src/store/memory-ledger.js";
+import { reconcileOrphans } from "./src/recovery.js";
+import { createDeadLetterLog, type DeadLetterLog } from "./src/store/deadletter.js";
+import { createInFlightRegistry, type InFlightRegistry } from "./src/store/in-flight.js";
+import { createLedger, type Ledger } from "./src/store/ledger.js";
+import { createFsStoreIo } from "./src/store/store-io.js";
 
 const PLUGIN_ID = "hookdeck";
+
+interface Runtime {
+  ledger: Ledger;
+  deadLetter: DeadLetterLog;
+  inFlight: InFlightRegistry;
+}
 
 export default definePluginEntry({
   id: PLUGIN_ID,
@@ -55,12 +68,12 @@ export default definePluginEntry({
       log.warn(`config: ${warning.path}: ${warning.message}`);
     }
 
-    const ledger = createMemoryLedger(config.dedupe.ttlHours);
-    const inFlight = createInFlightRegistry(config.maxConcurrent);
+    const instanceId = randomUUID();
     const retryCancels = new Map<string, number>();
 
-    // The host secret resolver needs the live OpenClawConfig, which only
-    // arrives with the service context.
+    // Populated at service start, when stateDir and the live OpenClawConfig
+    // become available.
+    let runtime: Runtime | undefined;
     let hostConfig: OpenClawPluginServiceContext["config"] | undefined;
     const hostSecrets = createHostSecretResolver(() => hostConfig);
 
@@ -74,9 +87,12 @@ export default definePluginEntry({
       return dispatcher;
     };
 
-    // Gates the route until the service starts, so events arriving during boot
-    // get a retryable 503 instead of being lost.
-    let ready = false;
+    const respondStarting = (res: Parameters<typeof writePlan>[0]) =>
+      writePlan(
+        res,
+        { plan: retryAfter(503, "starting", 30, "plugin is still starting"), extra: {} },
+        { allowRetryCancel: config.safety.allowRetryCancel },
+      );
 
     api.registerHttpRoute({
       path: config.ingress.basePath,
@@ -84,12 +100,10 @@ export default definePluginEntry({
       match: "prefix",
       replaceExisting: true,
       handler: async (req, res) => {
-        if (!ready) {
-          writePlan(
-            res,
-            { plan: retryAfter(503, "starting", 30, "plugin is still starting"), extra: {} },
-            { allowRetryCancel: config.safety.allowRetryCancel },
-          );
+        const active = runtime;
+        if (active === undefined) {
+          // Events arriving during boot are preserved rather than lost.
+          respondStarting(res);
           return true;
         }
 
@@ -97,8 +111,9 @@ export default definePluginEntry({
           const handled = await handleDelivery(
             {
               config,
-              ledger,
-              inFlight,
+              ledger: active.ledger,
+              deadLetter: active.deadLetter,
+              inFlight: active.inFlight,
               logger: log,
               dispatcherFor,
               onRetryCancel: (reason) =>
@@ -135,29 +150,98 @@ export default definePluginEntry({
 
     api.registerService({
       id: `${PLUGIN_ID}-ingress`,
-      start(ctx) {
+
+      async start(ctx) {
         hostConfig = ctx.config;
-        ready = true;
+
+        const io = config.storage.enabled ? createFsStoreIo() : undefined;
+        const stateDir = config.storage.enabled
+          ? join(ctx.stateDir, "hookdeck")
+          : undefined;
+
+        const onDegrade = (error: unknown, path: string) => {
+          // Logged once, by contract. Persistence stays off for the process
+          // lifetime — handling must never wedge on a broken disk.
+          ctx.logger.warn?.(
+            `[hookdeck] persistence disabled after a write failure at ${path}: ${
+              error instanceof Error ? error.message : String(error)
+            }. Handling continues in memory; a restart may now re-run work.`,
+          );
+        };
+
+        const ledger = await createLedger({
+          ttlHours: config.dedupe.ttlHours,
+          instanceId,
+          ...(stateDir !== undefined ? { stateDir } : {}),
+          ...(io !== undefined ? { io } : {}),
+          onDegrade,
+        });
+        const deadLetter = await createDeadLetterLog({
+          ttlHours: config.dedupe.ttlHours,
+          maxEntries: config.storage.deadLetterMaxEntries,
+          ...(stateDir !== undefined ? { stateDir } : {}),
+          ...(io !== undefined ? { io } : {}),
+          onDegrade,
+        });
+
+        const apiKey = await resolveSecret(config.apiKey, "apiKey", hostSecrets).catch((err) => {
+          ctx.logger.warn?.(`[hookdeck] could not resolve apiKey: ${String(err)}`);
+          return undefined;
+        });
+        const client = apiKey !== undefined ? createHookdeckClient({ apiKey }) : undefined;
+
+        // Before serving anything: hand interrupted work back to Hookdeck.
+        const summary = await reconcileOrphans({
+          ledger,
+          deadLetter,
+          logger: log,
+          client,
+          maxEvents: config.recovery.maxEvents,
+          enabled: config.recovery.enabled,
+        });
+        if (summary.found > 0) {
+          ctx.logger.info?.(
+            `[hookdeck] recovery: ${summary.found} interrupted, ${summary.retried} re-queued, ` +
+              `${summary.failed} failed, ${summary.skipped} recorded only`,
+          );
+        }
+
+        await ledger.prune();
+
+        runtime = {
+          ledger,
+          deadLetter,
+          inFlight: createInFlightRegistry(config.maxConcurrent),
+        };
 
         const routes = Object.entries(config.routes).filter(([, r]) => r.enabled);
+        const stats = ledger.stats();
         ctx.logger.info?.(
-          `ingress ready on ${config.ingress.basePath} (${routes.length} route${
+          `[hookdeck] ingress ready on ${config.ingress.basePath} (${routes.length} route${
             routes.length === 1 ? "" : "s"
-          }); ledger is in-memory, so a restart may re-run work once`,
+          }); ledger persistence=${stats.persistence}, ${stats.entries} entries, ` +
+            `recovery=${client !== undefined && config.recovery.enabled ? "on" : "off"}`,
         );
         for (const [routeId, route] of routes) {
           ctx.logger.info?.(
-            `  ${config.ingress.basePath}${route.path} <- source '${route.source}' (${route.dispatch.mode})`,
+            `[hookdeck]   ${config.ingress.basePath}${route.path} <- source '${route.source}' (${route.dispatch.mode})`,
           );
         }
       },
-      stop() {
+
+      async stop() {
         // All shutdown work belongs here, not in a `gateway_stop` hook: plugin
         // services are stopped BEFORE those hooks run, and `gateway_stop` is
         // capped at 5s. Connection pause and CLI teardown arrive with the
         // managed transport.
-        ready = false;
+        const active = runtime;
+        runtime = undefined;
         hostConfig = undefined;
+        if (active === undefined) return;
+
+        // Compacts on the way out, so the next boot loads a clean file.
+        await active.ledger.close().catch(() => {});
+        await active.deadLetter.close().catch(() => {});
       },
     });
   },

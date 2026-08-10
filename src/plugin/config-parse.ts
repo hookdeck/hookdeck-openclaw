@@ -37,6 +37,19 @@ const routeSchema = z.object({
 const configSchema = z.object({
   headerPrefix: z.string().min(1).default(DEFAULT_HEADER_PREFIX),
   signingSecret: secretInputSchema.optional(),
+  apiKey: secretInputSchema.optional(),
+  storage: z
+    .object({
+      enabled: z.boolean().default(true),
+      deadLetterMaxEntries: z.number().int().positive().max(100_000).default(500),
+    })
+    .default({ enabled: true, deadLetterMaxEntries: 500 }),
+  recovery: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxEvents: z.number().int().positive().max(10_000).default(50),
+    })
+    .default({ enabled: true, maxEvents: 50 }),
   ingress: z
     .object({ basePath: z.string().min(1).default("/hookdeck") })
     .default({ basePath: "/hookdeck" }),
@@ -144,13 +157,35 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
 
   if (problems.length > 0) return { ok: false, problems };
 
+  if (value.recovery.enabled && value.apiKey === undefined) {
+    warnings.push({
+      path: "apiKey",
+      message:
+        "recovery is enabled but no apiKey is configured; work interrupted by a crash will be recorded to the dead-letter log but not re-queued",
+    });
+  }
+
+  if (!value.storage.enabled) {
+    warnings.push({
+      path: "storage.enabled",
+      message:
+        "persistence is disabled; the ledger is memory-only, so a restart may re-run work and crash recovery is unavailable",
+    });
+  }
+
   const config: HookdeckPluginConfig = {
     headerPrefix: value.headerPrefix.replace(/-+$/, "").toLowerCase(),
     ...(value.signingSecret !== undefined ? { signingSecret: value.signingSecret } : {}),
+    ...(value.apiKey !== undefined ? { apiKey: value.apiKey } : {}),
     ingress: { basePath },
     maxConcurrent: value.maxConcurrent,
     busyRetryAfterSeconds: value.busyRetryAfterSeconds,
     dedupe: { ttlHours: value.dedupe.ttlHours },
+    storage: {
+      enabled: value.storage.enabled,
+      deadLetterMaxEntries: value.storage.deadLetterMaxEntries,
+    },
+    recovery: { enabled: value.recovery.enabled, maxEvents: value.recovery.maxEvents },
     safety: { allowRetryCancel: value.safety.allowRetryCancel },
     routes,
   };
