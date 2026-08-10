@@ -101,6 +101,7 @@ You do not need to configure destination auth either. CLI destinations default t
 | `safety.allowRetryCancel` | `false` | See [Retry cancellation](#retry-cancellation). |
 | `routes.<id>.source` | — | **Required.** Hookdeck source name. |
 | `routes.<id>.path` | `/<id>` | Appended to `ingress.basePath`. Matched as a prefix — see below. |
+| `routes.<id>.connectionId` | — | Only needed when provisioning is off. Pause-on-shutdown and catch-up act on a connection id, so without one they are silently inert; the plugin warns at startup if that applies. |
 | `routes.<id>.dispatch.sessionKey` | — | **Required.** Session the event is enqueued against. |
 | `routes.<id>.dispatch.text` | `Webhook received from {source}` | Placeholders: `{source}`, `{eventId}`, `{routeId}`. |
 | `routes.<id>.dispatch.wakeMode` | `now` | `now` also requests an immediate heartbeat; `next-heartbeat` only enqueues. |
@@ -273,7 +274,7 @@ npm test
 npm run typecheck
 ```
 
-363 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+370 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 

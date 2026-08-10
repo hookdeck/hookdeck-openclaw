@@ -77,6 +77,12 @@ export interface RouteConfig {
   signingSecret?: SecretInput;
   dispatch: DispatchConfig;
   /**
+   * Hookdeck connection id. Only needed when `provisioning.enabled` is false:
+   * pause-on-shutdown and catch-up both act on a connection, and without an id
+   * they have nothing to act on. Provisioning discovers it automatically.
+   */
+  connectionId?: string;
+  /**
    * Payload filters; all must pass. A non-match is answered 200, because the
    * drop is deliberate and a 2xx correctly retires the event.
    *

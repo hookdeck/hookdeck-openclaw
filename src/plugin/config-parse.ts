@@ -59,6 +59,7 @@ const routeSchema = z.object({
   path: z.string().optional(),
   source: z.string().min(1),
   signingSecret: secretInputSchema.optional(),
+  connectionId: z.string().min(1).optional(),
   dispatch: z.discriminatedUnion("mode", [
     wakeDispatchSchema,
     taskflowDispatchSchema,
@@ -211,6 +212,22 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       }
     }
 
+    // Pause-on-shutdown and catch-up both act on a connection. Without
+    // provisioning to discover the id, and without one configured, they are
+    // silently inert — which is exactly the kind of thing an operator only
+    // finds out during the outage they were relying on it for.
+    if (
+      !value.provisioning.enabled &&
+      route.connectionId === undefined &&
+      (value.pause.onShutdown || value.catchUp.enabled)
+    ) {
+      warnings.push({
+        path: `routes.${routeId}.connectionId`,
+        message:
+          "no connectionId and provisioning is disabled, so pause-on-shutdown and catch-up cannot run for this route",
+      });
+    }
+
     if (route.dispatch.mode === "agent" && route.dispatch.deliver) {
       warnings.push({
         path: `routes.${routeId}.dispatch.deliver`,
@@ -225,6 +242,7 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       source: route.source,
       ...(route.signingSecret !== undefined ? { signingSecret: route.signingSecret } : {}),
       dispatch: route.dispatch,
+      ...(route.connectionId !== undefined ? { connectionId: route.connectionId } : {}),
       ...(route.filters !== undefined ? { filters: route.filters } : {}),
     };
   }

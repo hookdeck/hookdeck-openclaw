@@ -112,7 +112,7 @@ export function renderTemplate(
         break;
     }
 
-    if (key === "payload" || key.startsWith("payload.")) {
+    if (key.startsWith("payload.")) {
       return encodeValue(resolvePath(ctx.payload, key.slice("payload.".length)), maxValueLength);
     }
 

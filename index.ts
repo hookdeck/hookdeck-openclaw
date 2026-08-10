@@ -284,6 +284,7 @@ export default definePluginEntry({
           cursors,
           logger: log,
           client,
+          ...(apiKey !== undefined ? { apiKey } : {}),
           spawn: nodeSpawnChild,
           resolveBinary: async (name) => {
             const all = await findBinaries(name);

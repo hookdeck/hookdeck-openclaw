@@ -94,12 +94,24 @@ describe("buildConnectionSpec — destination kinds", () => {
 
 describe("fingerprint", () => {
   it("is stable across key ordering, so reformatting is not a change", () => {
-    const a = fingerprint(buildConnectionSpec(cli));
-    const b = fingerprint(
-      JSON.parse(JSON.stringify(buildConnectionSpec(cli), Object.keys(buildConnectionSpec(cli)).reverse())),
+    // The previous version of this test compared a spec against itself and
+    // asserted the other value was a string, which proved nothing. Build a
+    // genuinely reordered object instead.
+    const spec = buildConnectionSpec(cli);
+    const reordered = {
+      rules: spec.rules,
+      destination: { config: spec.destination.config, name: spec.destination.name, type: spec.destination.type },
+      source: spec.source,
+      name: spec.name,
+    } as unknown as typeof spec;
+    expect(fingerprint(reordered)).toBe(fingerprint(spec));
+  });
+
+  it("ignores undefined-valued keys", () => {
+    const spec = buildConnectionSpec(cli);
+    expect(fingerprint({ ...spec, extra: undefined } as unknown as typeof spec)).toBe(
+      fingerprint(spec),
     );
-    expect(a).toBe(fingerprint(buildConnectionSpec(cli)));
-    expect(typeof b).toBe("string");
   });
 
   it("changes when the spec meaningfully changes", () => {

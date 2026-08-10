@@ -316,6 +316,11 @@
               "minLength": 1,
               "description": "Hookdeck source name. Required \u2014 'hookdeck listen' takes it as a positional argument and forwards exactly one source per process."
             },
+            "connectionId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Hookdeck connection id. Only needed when provisioning is disabled: pause-on-shutdown and catch-up both act on a connection, and without an id they are silently inert."
+            },
             "signingSecret": {
               "anyOf": [
                 {

@@ -31,6 +31,13 @@ export interface TransportManagerDeps {
   logger: Logger;
   client?: HookdeckClient | undefined;
   spawn: SpawnChild;
+  /**
+   * Resolved from plugin config, not read from the ambient environment: an
+   * operator who configures a secretRef expects that key to be used, and
+   * silently falling back to whatever `HOOKDECK_API_KEY` happens to be set to
+   * is both surprising and hard to debug.
+   */
+  apiKey?: string | undefined;
   resolveBinary(name: string): Promise<{ path: string; all: string[] }>;
   readVersion(path: string): Promise<string>;
   now?(): number;
@@ -61,6 +68,16 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
         ? { dedupeWindowMs: config.provisioning.dedupeWindowMs }
         : {}),
     };
+  }
+
+  /** Adopts an operator-supplied connection id, so pause and catch-up work
+   * without provisioning having run. */
+  async function seedConfiguredConnectionIds(): Promise<void> {
+    for (const [routeId, route] of Object.entries(config.routes)) {
+      if (route.connectionId === undefined) continue;
+      if (cursors.get(routeId)?.connectionId === route.connectionId) continue;
+      await cursors.patch(routeId, { connectionId: route.connectionId });
+    }
   }
 
   async function provision(): Promise<void> {
@@ -108,7 +125,7 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
 
   async function catchUp(): Promise<void> {
     if (!config.catchUp.enabled || deps.client === undefined) return;
-    for (const [routeId, route] of Object.entries(config.routes)) {
+    for (const routeId of Object.keys(config.routes)) {
       const cursor = cursors.get(routeId);
       if (cursor?.lastDisconnectAt === undefined || cursor.connectionId === undefined) continue;
 
@@ -126,9 +143,8 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
             result.estimated !== undefined ? ` (~${result.estimated} requests)` : ""
           }`,
         );
-        await cursors.patch(routeId, { lastDisconnectAt: undefined as unknown as number });
+        await cursors.clear(routeId, "lastDisconnectAt");
       }
-      void route;
     }
   }
 
@@ -186,12 +202,12 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
 
   return {
     async start() {
+      await seedConfiguredConnectionIds();
       await provision();
       await unpauseIfWePaused();
       await catchUp();
-      // The API key is resolved by the caller and passed through to the child
-      // via env only.
-      await startListeners(process.env.HOOKDECK_API_KEY);
+      // Passed to the child via env only, never argv.
+      await startListeners(deps.apiKey);
     },
 
     async stop() {

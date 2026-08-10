@@ -145,6 +145,11 @@ export function createAgentDispatcher(
   }
 
   return {
+    // Checked by the handler before it writes a ledger row, so a deferral
+    // leaves no trace. The duplicate check inside `dispatch` remains as a
+    // guard for callers that skip this.
+    canAccept: () => activeRuns < options.maxConcurrentRuns,
+
     async dispatch(ctx: DispatchContext): Promise<DispatchOutcome> {
       const eventId = ctx.delivery.eventId;
       if (eventId === undefined) {

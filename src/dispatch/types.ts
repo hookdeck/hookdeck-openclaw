@@ -26,4 +26,14 @@ export interface DispatchContext {
 
 export interface Dispatcher {
   dispatch(ctx: DispatchContext): Promise<DispatchOutcome>;
+  /**
+   * Whether this dispatcher can take work right now.
+   *
+   * Exists so a dispatcher-specific limit is decided during the handler's
+   * admission phase, BEFORE any ledger write. A dispatcher that refuses inside
+   * `dispatch()` has already had a `running` row written for work it never
+   * started — which breaks the rule that nothing is recorded for a deferred
+   * event, and leaves an orphan for boot recovery to re-queue.
+   */
+  canAccept?(): boolean;
 }

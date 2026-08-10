@@ -230,7 +230,22 @@ async function runPipeline(
   }
 
   try {
-    // 9. Deduplication.
+    // 9. Dispatcher-specific admission, still before any ledger write. The
+    //    handler's in-flight registry bounds concurrent *deliveries*; a
+    //    dispatcher may additionally bound concurrent *work* that outlives the
+    //    request, as background agent runs do.
+    const dispatcher = deps.dispatcherFor(routeId, route);
+    if (dispatcher.canAccept?.() === false) {
+      logger.debug(`route '${routeId}': dispatcher at capacity, deferring`);
+      return {
+        plan: deferFor(503, "busy", config.busyRetryAfterSeconds, "dispatcher is at capacity"),
+        extra: {},
+        routeId,
+        delivery,
+      };
+    }
+
+    // 10. Deduplication.
     const existing = deps.ledger.get(eventId);
     const admission = decideAdmission(existing, delivery.attemptCount);
     if (!admission.admit) {
@@ -243,7 +258,7 @@ async function runPipeline(
       };
     }
 
-    // 10. Decode and parse.
+    // 11. Decode and parse.
     //
     // Node differs from most runtimes in a way that matters:
     // `Buffer.toString("utf8")` never throws — it substitutes U+FFFD for
@@ -277,7 +292,7 @@ async function runPipeline(
       );
     }
 
-    // 11. Route filters. A non-match is a deliberate drop, and a 2xx correctly
+    // 12. Route filters. A non-match is a deliberate drop, and a 2xx correctly
     //     retires the event rather than leaving Hookdeck retrying something we
     //     will never accept.
     const filtered = evaluateFilters(route.filters, payload);
@@ -291,12 +306,10 @@ async function runPipeline(
       };
     }
 
-    // 12. Dispatch, bracketed by ledger writes. `begin` is awaited: it is the
+    // 13. Dispatch, bracketed by ledger writes. `begin` is awaited: it is the
     //     boundary before which we must not acknowledge anything.
     await deps.ledger.begin(eventId, delivery.attemptCount ?? 1, { routeId });
-    const outcome = await deps
-      .dispatcherFor(routeId, route)
-      .dispatch({ routeId, delivery, payload });
+    const outcome = await dispatcher.dispatch({ routeId, delivery, payload });
 
     // `deferred` means the dispatcher took ownership and settles the row itself
     // when its background run finishes. Settling here would tell the next boot

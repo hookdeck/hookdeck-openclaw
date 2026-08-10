@@ -640,3 +640,35 @@ describe("handleDelivery — deferral backs off once capacity is plainly not rec
     expect(ledger.get("evt_1")).toBeUndefined();
   });
 });
+
+describe("handleDelivery — dispatcher admission happens before the ledger write", () => {
+  it("writes NO ledger row when the dispatcher is at capacity", async () => {
+    // The agent dispatcher bounds background runs that outlive the request, and
+    // it used to refuse inside dispatch() — after a `running` row had already
+    // been written for work that never started, leaving an orphan for boot
+    // recovery to re-queue.
+    const { deps, ledger, dispatch } = harness();
+    deps.dispatcherFor = () => ({ dispatch, canAccept: () => false });
+
+    const result = await handleDelivery(deps, request());
+
+    expect(result.plan.status).toBe(503);
+    expect(result.plan.code).toBe("busy");
+    expect(ledger.get("evt_1")).toBeUndefined();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("dispatches normally when the dispatcher has capacity", async () => {
+    const { deps, dispatch } = harness();
+    deps.dispatcherFor = () => ({ dispatch, canAccept: () => true });
+    const result = await handleDelivery(deps, request());
+    expect(result.plan.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("treats a dispatcher without canAccept as always available", async () => {
+    const { deps, dispatch } = harness();
+    expect((await handleDelivery(deps, request())).plan.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+});

@@ -268,3 +268,69 @@ describe("catch-up", () => {
     expect(cursors.get("stripe")?.lastDisconnectAt).toBeUndefined();
   });
 });
+
+describe("review regressions", () => {
+  it("passes the CONFIGURED api key to the child, not an ambient env var", async () => {
+    // Previously read process.env.HOOKDECK_API_KEY, so a configured secretRef
+    // was ignored and whatever happened to be in the environment was used.
+    process.env.HOOKDECK_API_KEY = "ambient_wrong_key";
+    try {
+      const io = createFakeStoreIo();
+      const cursors = await createCursorStore({ stateDir: "/state", io });
+      const spawn = vi.fn<
+        (c: string, a: readonly string[], e: Record<string, string>) => {
+          kill: () => void;
+          onLine: () => void;
+          onExit: () => void;
+        }
+      >(() => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }));
+      const mgr = createTransportManager({
+        config: config({ transport: { mode: "cli" }, provisioning: { enabled: true } }),
+        cursors,
+        logger: silent,
+        client: fakeClient(),
+        apiKey: "configured_right_key",
+        spawn,
+        resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+        readVersion: async () => "hookdeck version 2.4.0",
+      });
+      await mgr.start();
+
+      const env = spawn.mock.calls[0]![2];
+      expect(env.HOOKDECK_API_KEY).toBe("configured_right_key");
+    } finally {
+      delete process.env.HOOKDECK_API_KEY;
+    }
+  });
+
+  it("adopts a configured connectionId, so pause works without provisioning", async () => {
+    // pause-on-shutdown and catch-up both act on a connection id, which only
+    // provisioning used to write — leaving both silently inert for anyone who
+    // provisioned by hand.
+    const cfg = config({
+      routes: {
+        stripe: {
+          source: "stripe",
+          connectionId: "web_manual",
+          dispatch: { mode: "wake", sessionKey: "main" },
+        },
+      },
+    });
+    const { mgr, cursors, client } = await manager(cfg);
+    await mgr.start();
+    expect(cursors.get("stripe")?.connectionId).toBe("web_manual");
+
+    await mgr.stop();
+    expect(client.pauseConnection).toHaveBeenCalledWith("web_manual");
+  });
+
+  it("clears the disconnect cursor outright rather than storing an undefined", async () => {
+    const { mgr, cursors } = await manager(config({ provisioning: { enabled: true } }));
+    await mgr.start();
+    await cursors.patch("stripe", { lastDisconnectAt: 1_000 });
+    await mgr.start();
+
+    const record = cursors.get("stripe")!;
+    expect("lastDisconnectAt" in record).toBe(false);
+  });
+});

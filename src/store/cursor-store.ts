@@ -29,6 +29,8 @@ export interface CursorRecord {
 export interface CursorStore {
   get(routeId: string): CursorRecord | undefined;
   patch(routeId: string, patch: Partial<Omit<CursorRecord, "key" | "routeId">>): Promise<void>;
+  /** Removes a field outright, rather than writing an undefined over it. */
+  clear(routeId: string, field: keyof CursorRecord): Promise<void>;
   all(): CursorRecord[];
   close(): Promise<void>;
   stats(): { entries: number; persistence: PersistenceState };
@@ -77,6 +79,14 @@ export async function createCursorStore(options: CursorStoreOptions = {}): Promi
         ...patch,
         updatedAt: now(),
       });
+    },
+
+    async clear(routeId, field) {
+      const existing = store.get(routeId);
+      if (existing === undefined) return;
+      const next = { ...existing };
+      delete next[field];
+      await store.put({ ...next, key: routeId, routeId, updatedAt: now() });
     },
 
     all() {
