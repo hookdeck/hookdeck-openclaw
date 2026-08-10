@@ -1,0 +1,220 @@
+{
+  "id": "hookdeck",
+  "name": "Hookdeck",
+  "description": "Reliable webhooks for OpenClaw. Verified, deduplicated and retryable event delivery via the Hookdeck Event Gateway.",
+  "activation": {
+    "onStartup": true
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "signingSecret",
+          "expected": "string",
+          "ownerKind": "plugin"
+        },
+        {
+          "path": "routes.*.signingSecret",
+          "expected": "string",
+          "ownerKind": "route"
+        }
+      ]
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "headerPrefix": {
+        "type": "string",
+        "minLength": 1,
+        "default": "x-hookdeck",
+        "description": "Prefix for Hookdeck's delivery headers. White-labelable per Hookdeck project, so read from config rather than assumed."
+      },
+      "signingSecret": {
+        "description": "Default Hookdeck signing secret (Settings -> Project -> Secrets). Routes may override.",
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "env",
+                  "file",
+                  "exec"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        ]
+      },
+      "ingress": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "basePath": {
+            "type": "string",
+            "minLength": 1,
+            "default": "/hookdeck",
+            "description": "Gateway route prefix. May not be '/'."
+          }
+        }
+      },
+      "maxConcurrent": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+        "default": 4,
+        "description": "Local admission control. In CLI transport this is the only limit, since CLI destinations carry no rate_limit field."
+      },
+      "busyRetryAfterSeconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3600,
+        "default": 10,
+        "description": "Retry-After sent when deferring a delivery at capacity."
+      },
+      "dedupe": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ttlHours": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 720,
+            "default": 168,
+            "description": "Ledger retention. Must exceed Hookdeck's one-week automatic retry ceiling."
+          }
+        }
+      },
+      "safety": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowRetryCancel": {
+            "type": "boolean",
+            "default": false,
+            "description": "Permit 'Retry-After: -1' to cancel Hookdeck's automatic retries on permanently-invalid input. Off by default: with it off, wire behaviour matches the sibling Hermes and n8n plugins exactly."
+          }
+        }
+      },
+      "routes": {
+        "type": "object",
+        "description": "Map of routeId -> route. Each route is served at <ingress.basePath>/<path>.",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "dispatch"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "path": {
+              "type": "string",
+              "description": "Path segment appended to ingress.basePath. Defaults to '/<routeId>'."
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Hookdeck source name. Required \u2014 'hookdeck listen' takes it as a positional argument and forwards exactly one source per process."
+            },
+            "signingSecret": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "source",
+                    "provider",
+                    "id"
+                  ],
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "env",
+                        "file",
+                        "exec"
+                      ]
+                    },
+                    "provider": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              ]
+            },
+            "dispatch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "sessionKey"
+              ],
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "wake"
+                  ],
+                  "description": "Dispatch mode. 'taskflow' and 'agent' land in a later release."
+                },
+                "sessionKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Session the system event is enqueued against. Required \u2014 enqueueSystemEvent throws without one."
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "System event text. Placeholders: {source}, {eventId}, {routeId}."
+                },
+                "wakeMode": {
+                  "type": "string",
+                  "enum": [
+                    "now",
+                    "next-heartbeat"
+                  ],
+                  "default": "now",
+                  "description": "'now' also requests an immediate heartbeat; 'next-heartbeat' only enqueues."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
