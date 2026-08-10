@@ -19,7 +19,10 @@ import { reconcileOrphans } from "./src/recovery.js";
 import { createDeadLetterLog, type DeadLetterLog } from "./src/store/deadletter.js";
 import { createInFlightRegistry, type InFlightRegistry } from "./src/store/in-flight.js";
 import { createLedger, type Ledger } from "./src/store/ledger.js";
+import { createCursorStore, type CursorStore } from "./src/store/cursor-store.js";
 import { createFsStoreIo } from "./src/store/store-io.js";
+import { createTransportManager, type TransportManager } from "./src/transport/manager.js";
+import { findBinaries, nodeSpawnChild, readCliVersion } from "./src/transport/node-spawn.js";
 
 const PLUGIN_ID = "hookdeck";
 
@@ -27,6 +30,8 @@ interface Runtime {
   ledger: Ledger;
   deadLetter: DeadLetterLog;
   inFlight: InFlightRegistry;
+  cursors: CursorStore;
+  transport: TransportManager;
   client?: HookdeckClient | undefined;
 }
 
@@ -244,6 +249,12 @@ export default definePluginEntry({
           onDegrade,
         });
 
+        const cursors = await createCursorStore({
+          ...(stateDir !== undefined ? { stateDir } : {}),
+          ...(io !== undefined ? { io } : {}),
+          onDegrade,
+        });
+
         const apiKey = await resolveSecret(config.apiKey, "apiKey", hostSecrets).catch((err) => {
           ctx.logger.warn?.(`[hookdeck] could not resolve apiKey: ${String(err)}`);
           return undefined;
@@ -268,12 +279,33 @@ export default definePluginEntry({
 
         await ledger.prune();
 
+        const transport = createTransportManager({
+          config,
+          cursors,
+          logger: log,
+          client,
+          spawn: nodeSpawnChild,
+          resolveBinary: async (name) => {
+            const all = await findBinaries(name);
+            return { path: all[0] ?? name, all };
+          },
+          readVersion: readCliVersion,
+        });
+
         runtime = {
           ledger,
           deadLetter,
+          cursors,
+          transport,
           inFlight: createInFlightRegistry(config.maxConcurrent),
           client,
         };
+
+        // After the ingress is live, so a catch-up replay lands on a route that
+        // can serve it.
+        await transport.start().catch((err) => {
+          ctx.logger.warn?.(`[hookdeck] transport start failed: ${String(err)}`);
+        });
 
         const routes = Object.entries(config.routes).filter(([, r]) => r.enabled);
         const stats = ledger.stats();
@@ -303,9 +335,15 @@ export default definePluginEntry({
         dispatchers.clear();
         if (active === undefined) return;
 
+        // Order matters: pause the connection before stopping the listener, or
+        // a clean shutdown forfeits the CLI's grace window and events arriving
+        // in between are discarded rather than held.
+        await active.transport.stop().catch(() => {});
+
         // Compacts on the way out, so the next boot loads a clean file.
         await active.ledger.close().catch(() => {});
         await active.deadLetter.close().catch(() => {});
+        await active.cursors.close().catch(() => {});
       },
     });
   },

@@ -5,7 +5,7 @@ import {
   type AgentDispatchOptions,
   type AgentRunner,
 } from "../src/dispatch/agent.js";
-import type { HookdeckClient } from "../src/hookdeck/client.js";
+import type { EventRetrier } from "../src/hookdeck/client.js";
 import { parseHookdeckDelivery } from "../src/protocol/delivery.js";
 import { TRUST_HINT } from "../src/protocol/template.js";
 import { createDeadLetterLog } from "../src/store/deadletter.js";
@@ -43,7 +43,7 @@ function fakeRunner(overrides: Partial<AgentRunner> = {}): AgentRunner {
 async function harness(
   options: Partial<AgentDispatchOptions> = {},
   runner: AgentRunner = fakeRunner(),
-  client?: HookdeckClient,
+  client?: EventRetrier,
 ) {
   const ledger = createMemoryLedger({ ttlHours: 168, instanceId: "test" });
   const deadLetter = await createDeadLetterLog({ ttlHours: 168 });
@@ -146,7 +146,7 @@ describe("agent dispatch — async_retry", () => {
     const subagent = fakeRunner({
       waitFor: vi.fn(async () => ({ status: "error" as const, error: "model exploded" })),
     });
-    const client: HookdeckClient = {
+    const client: EventRetrier = {
       retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
     };
     const { dispatcher, ledger } = await harness({}, subagent, client);
@@ -162,7 +162,7 @@ describe("agent dispatch — async_retry", () => {
     const subagent = fakeRunner({
       waitFor: vi.fn(async () => ({ status: "error" as const, error: "still broken" })),
     });
-    const client: HookdeckClient = {
+    const client: EventRetrier = {
       retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
     };
     const { dispatcher, ledger, deadLetter } = await harness(
@@ -252,7 +252,7 @@ describe("agent dispatch — sync", () => {
           : { status: "error" as const, error: "died later" };
       }),
     });
-    const client: HookdeckClient = {
+    const client: EventRetrier = {
       retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
     };
     const { dispatcher } = await harness({ ackMode: "sync" }, subagent, client);

@@ -1,4 +1,4 @@
-import type { HookdeckClient } from "./hookdeck/client.js";
+import type { EventRetrier } from "./hookdeck/client.js";
 import type { Logger } from "./ingress/handler.js";
 import type { DeadLetterLog } from "./store/deadletter.js";
 import type { Ledger } from "./store/ledger.js";
@@ -28,7 +28,7 @@ export interface ReconcileOptions {
   deadLetter: DeadLetterLog;
   logger: Logger;
   /** Absent when no API key is configured; recovery then records only. */
-  client?: HookdeckClient | undefined;
+  client?: EventRetrier | undefined;
   /** Stops a crash loop from storming the API. */
   maxEvents?: number;
   enabled?: boolean;

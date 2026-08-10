@@ -120,6 +120,50 @@ export interface StorageConfig {
   deadLetterMaxEntries: number;
 }
 
+export interface TransportConfig {
+  /**
+   * `cli` supervises a `hookdeck listen` child per route — zero ingress, but a
+   * CLI destination is not durable while disconnected. `http` expects the
+   * Gateway to be reachable and gives the full reliability stack. `none` leaves
+   * the transport entirely to the operator.
+   */
+  mode: "cli" | "http" | "none";
+  /** Gateway port the CLI forwards to. */
+  port: number;
+  /** Resolved explicitly, because a shadowed binary defeats the version gate. */
+  binaryPath: string;
+  /** Downgrade the >=2.4.0 gate to a warning. Sub-2.3.2 silently stops delivering. */
+  allowUnsupportedVersion: boolean;
+  /** Public base URL of the Gateway, for `http` mode provisioning. */
+  publicUrl?: string;
+}
+
+export interface ProvisioningConfig {
+  /** Upsert connections at startup. Off leaves provisioning to the operator. */
+  enabled: boolean;
+  /** Re-upsert even when the computed spec is unchanged. */
+  force: boolean;
+  /** Native dedupe window, so a double-firing provider costs one run. */
+  dedupeWindowMs?: number;
+}
+
+export interface PauseConfig {
+  /**
+   * Pause the connection before stopping the listener on shutdown. Events are
+   * then held at `HOLD` and delivered on the next start, instead of being
+   * discarded — a clean shutdown otherwise forfeits the CLI's grace window.
+   */
+  onShutdown: boolean;
+  /** Bound our own teardown; the host applies no per-service stop timeout. */
+  shutdownTimeoutMs: number;
+}
+
+export interface CatchUpConfig {
+  enabled: boolean;
+  /** Below this, an outage is not worth a bulk replay. */
+  minGapSeconds: number;
+}
+
 export interface HookdeckPluginConfig {
   /** White-labelable per Hookdeck project. Read, never hardcoded. */
   headerPrefix: string;
@@ -151,6 +195,10 @@ export interface HookdeckPluginConfig {
   };
   storage: StorageConfig;
   recovery: RecoveryConfig;
+  transport: TransportConfig;
+  provisioning: ProvisioningConfig;
+  pause: PauseConfig;
+  catchUp: CatchUpConfig;
   safety: SafetyConfig;
   routes: Record<string, RouteConfig>;
 }

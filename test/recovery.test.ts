@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { HookdeckClient } from "../src/hookdeck/client.js";
+import type { EventRetrier } from "../src/hookdeck/client.js";
 import { reconcileOrphans } from "../src/recovery.js";
 import { createDeadLetterLog } from "../src/store/deadletter.js";
 import { createLedger, createMemoryLedger } from "../src/store/ledger.js";
@@ -8,7 +8,7 @@ import { createFakeStoreIo } from "./fakes/fake-store-io.js";
 const STATE_DIR = "/state/hookdeck";
 const silent = { debug: () => {}, info: () => {}, warn: () => {} };
 
-function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
+function fakeClient(overrides: Partial<EventRetrier> = {}): EventRetrier {
   return {
     retryEvent: vi.fn(async (eventId: string) => ({ ok: true as const, data: { eventId } })),
     ...overrides,

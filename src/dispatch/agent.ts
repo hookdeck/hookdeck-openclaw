@@ -1,4 +1,4 @@
-import type { HookdeckClient } from "../hookdeck/client.js";
+import type { EventRetrier } from "../hookdeck/client.js";
 import type { Logger } from "../ingress/handler.js";
 import { cancelRetries, deferFor, ok, retryable, accepted } from "../protocol/outcome.js";
 import { buildPrompt, TRUST_HINT } from "../protocol/template.js";
@@ -68,7 +68,7 @@ export interface AgentDispatchDeps {
   ledger: Ledger;
   deadLetter: DeadLetterLog;
   logger: Logger;
-  client?: HookdeckClient | undefined;
+  client?: EventRetrier | undefined;
 }
 
 /** Background waits are bounded so a wedged run cannot leak a slot forever. */

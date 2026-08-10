@@ -115,6 +115,102 @@
           }
         }
       },
+      "transport": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "http",
+              "none"
+            ],
+            "default": "none",
+            "description": "cli supervises a `hookdeck listen` child per route (zero ingress, but a CLI destination is not durable while disconnected). http expects a reachable Gateway and gives the full reliability stack. none leaves transport to the operator."
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 18789,
+            "description": "Gateway port the CLI forwards to."
+          },
+          "binaryPath": {
+            "type": "string",
+            "minLength": 1,
+            "default": "hookdeck",
+            "description": "Resolved explicitly on PATH, because a shadowed binary defeats the version gate."
+          },
+          "allowUnsupportedVersion": {
+            "type": "boolean",
+            "default": false,
+            "description": "Downgrade the >=2.4.0 gate to a warning. Versions below 2.3.2 silently stop delivering after a session expires."
+          },
+          "publicUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Public base URL of the Gateway, required for http transport provisioning."
+          }
+        }
+      },
+      "provisioning": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Upsert Hookdeck connections at startup. Requires apiKey."
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "Re-upsert even when the computed spec is unchanged."
+          },
+          "dedupeWindowMs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400000,
+            "description": "Native Hookdeck dedupe window, so a double-firing provider costs one run."
+          }
+        }
+      },
+      "pause": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "onShutdown": {
+            "type": "boolean",
+            "default": true,
+            "description": "Pause the connection before stopping the listener, so events are held at HOLD rather than discarded. A clean CLI shutdown otherwise forfeits the server's grace window."
+          },
+          "shutdownTimeoutMs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60000,
+            "default": 5000
+          }
+        }
+      },
+      "catchUp": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Replay requests that arrived while no listener was attached."
+          },
+          "minGapSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400,
+            "default": 30,
+            "description": "Below this, an outage is not worth a bulk replay."
+          }
+        }
+      },
       "maxConcurrent": {
         "type": "integer",
         "minimum": 1,

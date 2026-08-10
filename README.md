@@ -2,7 +2,7 @@
 
 Reliable webhooks for OpenClaw. Puts the [Hookdeck](https://hookdeck.com) Event Gateway in front of your OpenClaw Gateway so inbound webhooks are verified, deduplicated and retryable.
 
-> **Status: M3.** Signature verification, durable deduplication, crash recovery, dead-lettering, route filters and all three dispatch modes work end to end. Connection provisioning, CLI supervision and the operator tools are not here yet — see [Limitations](#limitations). Nothing below describes behaviour that isn't implemented.
+> **Status: M4.** Signature verification, durable deduplication, crash recovery, dead-lettering, route filters, all three dispatch modes, connection provisioning, CLI supervision, pause-on-shutdown and outage catch-up all work. The agent-facing operator tools are not here yet — see [Limitations](#limitations). Nothing below describes behaviour that isn't implemented.
 
 ## Why
 
@@ -146,6 +146,39 @@ Filters are matched against the parsed payload; all must pass. A non-match is an
 
 `equals`, `in` and `exists` are supported. Prefer filtering at the Hookdeck connection where you can — an event filtered there never reaches the agent and costs nothing.
 
+## Transport and provisioning
+
+Set `transport.mode` to `cli` and the plugin supervises one `hookdeck listen` child per route; `http` expects a reachable Gateway and provisions HTTP destinations; `none` leaves it to you.
+
+```json
+"transport": { "mode": "cli", "port": 18789 },
+"provisioning": { "enabled": true }
+```
+
+Provisioning upserts the source, destination and connection in one `PUT /connections`, skipping the call entirely when the computed spec is unchanged. Three details are pinned because they are wrong by default or undocumented:
+
+- **`auth: {}` is sent alongside `auth_type`.** The OpenAPI schema does not mark `auth` required; the API answers `422 destination.config.auth is required` without it.
+- **`path_forwarding_disabled: true`.** It defaults to false, so Hookdeck appends the source request's path onto the destination path.
+- **The retry rule is derived from the statuses the pipeline emits**, so it cannot drift narrower than what we answer.
+
+A failed provisioning call never blocks startup — you may have provisioned by hand, and a Gateway that will not boot is worse than one that is not provisioned.
+
+### CLI supervision
+
+The `hookdeck` binary is resolved explicitly on `PATH` and the plugin **warns when one shadows another**, because a version check against one binary means nothing if a different one is launched. Versions below 2.4.0 are refused outright: before 2.3.2 the CLI does not recover an expired session — it stays connected, reports itself healthy, and silently stops delivering. Set `transport.allowUnsupportedVersion` to downgrade that to a warning. When the transport won't start, ingress still serves.
+
+`--output compact` is forced, since the interactive default exits immediately without a TTY, which a supervisor reads as flakiness rather than misconfiguration. The API key reaches the child through the environment, never argv.
+
+**The plugin never runs `hookdeck ci --api-key`.** It looks like an idempotent login and is not: it rewrites the CLI's global config, swaps the stored key for a session key, and switches the active project. Authentication is your business, not a side effect of starting a gateway.
+
+### Shutdown and catch-up
+
+On shutdown the connection is **paused before** the listener is stopped. That order is the whole point: a clean CLI shutdown tombstones the session immediately and forfeits the server's ~2 minute grace window, so events arriving next become `CLI_DISCONNECTED` ignored events and their requests are discarded. Paused, they are held at `HOLD` and delivered on the next start with attempt trigger `UNPAUSE`.
+
+The `pausedByUs` marker is written *before* the pause call, so a crash in between still leaves the breadcrumb that unpauses on the next start — a connection left paused forever is a silent outage.
+
+`lastDisconnectAt` is written on **every** listener exit, clean or otherwise. It is the only durable evidence of an outage window, and the catch-up replay needs it to bound its query: `bulk/requests/replay` is the only path that can be time-scoped, since `bulk/ignored-events/retry` takes no date filter and there is no project-wide `GET /ignored-events` to enumerate with.
+
 ## Response contract
 
 Every status is chosen for what Hookdeck does next, not for HTTP tidiness. Any non-2xx is retried by default.
@@ -230,10 +263,7 @@ Signature headers and resolved secrets are redacted from logs.
 Not yet implemented:
 
 - **No completion tracking for agent turns.** See [Agent turns](#agent-turns) — `sync` and `maxAgentRetries` need a completion hook the TaskFlow transport does not provide.
-- **No connection provisioning.** Create the source, destination and connection in Hookdeck yourself, and set the retry rule as above.
-- **No CLI supervision or catch-up.** Run `hookdeck listen` yourself. Note that a CLI destination is not durable when disconnected: events become `CLI_DISCONNECTED` ignored events and the request is discarded. A clean `Ctrl+C` is *worse* than a crash, because it forfeits the server's ~2-minute grace window.
-- **No operator tools** (`setup`, `status`, `pause`/`resume`, `replay`, `doctor`).
-- **No connection pause on shutdown**, which is what makes restarts lossless.
+- **No agent-facing operator tools yet** (`setup`, `status`, `pause`/`resume`, `replay`, `doctor`). The behaviour behind them exists; the tool surface does not.
 
 ## Development
 
@@ -243,7 +273,7 @@ npm test
 npm run typecheck
 ```
 
-296 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+363 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 

@@ -83,6 +83,34 @@ const configSchema = z.object({
       maxEvents: z.number().int().positive().max(10_000).default(50),
     })
     .default({ enabled: true, maxEvents: 50 }),
+  transport: z
+    .object({
+      mode: z.enum(["cli", "http", "none"]).default("none"),
+      port: z.number().int().positive().max(65535).default(18789),
+      binaryPath: z.string().min(1).default("hookdeck"),
+      allowUnsupportedVersion: z.boolean().default(false),
+      publicUrl: z.string().url().optional(),
+    })
+    .default({ mode: "none", port: 18789, binaryPath: "hookdeck", allowUnsupportedVersion: false }),
+  provisioning: z
+    .object({
+      enabled: z.boolean().default(false),
+      force: z.boolean().default(false),
+      dedupeWindowMs: z.number().int().positive().max(86_400_000).optional(),
+    })
+    .default({ enabled: false, force: false }),
+  pause: z
+    .object({
+      onShutdown: z.boolean().default(true),
+      shutdownTimeoutMs: z.number().int().positive().max(60_000).default(5_000),
+    })
+    .default({ onShutdown: true, shutdownTimeoutMs: 5_000 }),
+  catchUp: z
+    .object({
+      enabled: z.boolean().default(true),
+      minGapSeconds: z.number().int().nonnegative().max(86_400).default(30),
+    })
+    .default({ enabled: true, minGapSeconds: 30 }),
   ingress: z
     .object({ basePath: z.string().min(1).default("/hookdeck") })
     .default({ basePath: "/hookdeck" }),
@@ -218,6 +246,20 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     });
   }
 
+  if (value.provisioning.enabled && value.apiKey === undefined) {
+    problems.push({
+      path: "provisioning.enabled",
+      message: "provisioning requires an apiKey",
+    });
+  }
+
+  if (value.transport.mode === "http" && value.transport.publicUrl === undefined) {
+    problems.push({
+      path: "transport.publicUrl",
+      message: "http transport requires transport.publicUrl so the destination can be provisioned",
+    });
+  }
+
   if (!value.storage.enabled) {
     warnings.push({
       path: "storage.enabled",
@@ -240,6 +282,22 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       deadLetterMaxEntries: value.storage.deadLetterMaxEntries,
     },
     recovery: { enabled: value.recovery.enabled, maxEvents: value.recovery.maxEvents },
+    transport: {
+      mode: value.transport.mode,
+      port: value.transport.port,
+      binaryPath: value.transport.binaryPath,
+      allowUnsupportedVersion: value.transport.allowUnsupportedVersion,
+      ...(value.transport.publicUrl !== undefined ? { publicUrl: value.transport.publicUrl } : {}),
+    },
+    provisioning: {
+      enabled: value.provisioning.enabled,
+      force: value.provisioning.force,
+      ...(value.provisioning.dedupeWindowMs !== undefined
+        ? { dedupeWindowMs: value.provisioning.dedupeWindowMs }
+        : {}),
+    },
+    pause: { onShutdown: value.pause.onShutdown, shutdownTimeoutMs: value.pause.shutdownTimeoutMs },
+    catchUp: { enabled: value.catchUp.enabled, minGapSeconds: value.catchUp.minGapSeconds },
     safety: { allowRetryCancel: value.safety.allowRetryCancel },
     routes,
   };
