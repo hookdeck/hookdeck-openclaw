@@ -73,6 +73,16 @@ GW=$!
 trap 'kill $GW 2>/dev/null' EXIT
 sleep 14
 
+EXPECTED_TOOLS=8
+DECLARED=$(grep -o "declared [0-9]* tool(s)" "$LOG" | head -1 | grep -o "[0-9]*")
+if [ "${DECLARED:-0}" != "$EXPECTED_TOOLS" ]; then
+  echo "Expected $EXPECTED_TOOLS tools, host declared '${DECLARED:-none}'."
+  echo "A tool missing from contracts.tools in the manifest is LOGGED, not thrown —"
+  echo "the plugin looks healthy and registers nothing. Last lines of the log:"
+  tail -12 "$LOG"
+  exit 1
+fi
+
 if ! grep -q "declared .* tool" "$LOG"; then
   echo "Gateway did not declare tools — aborting. Last lines of the log:"
   tail -12 "$LOG"
@@ -97,6 +107,10 @@ ask() {
 
 ask "Call hookdeck_status and report exactly what it returns."
 ask "Call hookdeck_doctor and quote its response verbatim."
+# Proves the newest tool is visible to a real model and explains itself when it
+# cannot act, rather than inventing an answer. No API key in this profile, so
+# the correct response is that it needs an operator.
+ask "Are there any dead webhook events I should know about? Use the hookdeck tools."
 
 echo
 echo "──────────────────────────────────────────────────────────────"
