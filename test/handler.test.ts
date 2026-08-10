@@ -376,6 +376,47 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
       expect(result.plan.status).toBe(200);
       expect(dispatch).toHaveBeenCalledOnce();
     });
+
+    it("rejects a CESU-8 lone surrogate", async () => {
+      // ed a0 80 is a lone surrogate in CESU-8. Node decodes it to replacement
+      // characters and JSON.parse then SUCCEEDS, so only the round-trip check
+      // catches it. Python instead parses this cleanly via `surrogatepass` and
+      // explodes later at the network boundary — same root cause, different
+      // blast radius, which is why each runtime needs its own fixture rather
+      // than a shared assumption.
+      const bytes = Buffer.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xed, 0xa0, 0x80, 0x22, 0x7d]);
+      expect(() => JSON.parse(bytes.toString("utf8"))).not.toThrow();
+
+      const { deps } = harness();
+      const result = await handleDelivery(deps, rawRequest(bytes));
+      expect(result.plan.status).toBe(400);
+      expect(result.plan.code).toBe("malformed_json");
+    });
+
+    it.each([
+      ["LE", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"a":"ok"}', "utf16le")])],
+      ["BE", Buffer.from([0xfe, 0xff, 0x00, 0x7b, 0x00, 0x7d])],
+    ])("rejects UTF-16 with a %s BOM, which RFC 8259 §8.1 forbids", async (_endian, bytes) => {
+      const { deps } = harness();
+      const result = await handleDelivery(deps, rawRequest(bytes));
+      expect(result.plan.status).toBe(400);
+      expect(result.plan.code).toBe("malformed_json");
+    });
+
+    it("ACCEPTS an escaped lone surrogate, because that is valid JSON", async () => {
+      // `"\ud800"` as an escape is ASCII on the wire, so the body is valid
+      // UTF-8 and round-trips. RFC 8259 permits any \uXXXX escape including an
+      // unpaired surrogate, so rejecting it would reject valid JSON.
+      //
+      // Documented rather than guarded because JS tolerates lone surrogates in
+      // strings and substitutes U+FFFD when encoding, so the blast radius is a
+      // mangled character — not the deferred UnicodeEncodeError Python gets.
+      const bytes = Buffer.from(String.raw`{"a":"\ud800"}`, "utf8");
+      const { deps, dispatch } = harness();
+      const result = await handleDelivery(deps, rawRequest(bytes));
+      expect(result.plan.status).toBe(200);
+      expect(dispatch).toHaveBeenCalledOnce();
+    });
   });
 
   it("returns a retryable 503 when dispatch fails transiently", async () => {
