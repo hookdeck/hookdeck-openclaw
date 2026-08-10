@@ -21,9 +21,16 @@ import { createFakeStoreIo } from "./fakes/fake-store-io.js";
 
 interface CapturedTool {
   name: string;
+  label: string;
   description: string;
   parameters: { type?: string; properties?: Record<string, unknown>; required?: string[] };
-  execute: (params: unknown) => Promise<unknown>;
+  execute: (toolCallId: string, params: unknown) => Promise<{ content: unknown[]; details: unknown }>;
+}
+
+/** Tool results are AgentToolResults; the payload is JSON inside `content`. */
+function unwrap(result: { content: unknown[] }): unknown {
+  const first = result.content[0] as { text?: string } | undefined;
+  return first?.text === undefined ? undefined : JSON.parse(first.text);
 }
 
 function captureTools(options: {
@@ -64,6 +71,32 @@ async function liveDeps(): Promise<ToolDeps> {
     configWarnings: () => parsed.warnings,
   };
 }
+
+describe("tool registration — the AgentTool contract", () => {
+  it("gives every tool the required label", () => {
+    // `AgentTool` requires `label`. Without it the host accepts the
+    // registration and the agent never sees the tool — which is exactly how
+    // M5 shipped: 7 declared, 0 rejections, and the model reporting it had no
+    // hookdeck tools available.
+    for (const tool of captureTools({}).tools) {
+      expect(tool.label, tool.name).toBeTruthy();
+      expect(typeof tool.label).toBe("string");
+    }
+  });
+
+  it("uses the erased execute signature (toolCallId first), not (params)", () => {
+    for (const tool of captureTools({}).tools) {
+      expect(tool.execute.length, `${tool.name} execute arity`).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("returns an AgentToolResult rather than a bare value", async () => {
+    const { tools } = captureTools({});
+    const result = await tools[0]!.execute("call_1", {});
+    expect(Array.isArray(result.content)).toBe(true);
+    expect(result).toHaveProperty("details");
+  });
+});
 
 describe("tool registration", () => {
   it("registers exactly the names the manifest contract declares", () => {
@@ -110,12 +143,12 @@ describe("tool registration", () => {
 });
 
 describe("tool execution through the registered surface", () => {
-  it("answers 'not started yet' rather than throwing before the service starts", async () => {
+  it("explains that it needs a running Gateway rather than throwing", async () => {
     const { tools } = captureTools({ deps: () => undefined });
     for (const tool of tools) {
-      const result = (await tool.execute({})) as { ok: boolean; note?: string };
+      const result = unwrap(await tool.execute("call_1", {})) as { ok: boolean; note?: string };
       expect(result.ok, tool.name).toBe(false);
-      expect(result.note, tool.name).toMatch(/not finished starting/i);
+      expect(result.note, tool.name).toMatch(/running Gateway/i);
     }
   });
 
@@ -124,7 +157,7 @@ describe("tool execution through the registered surface", () => {
     const { tools } = captureTools({ deps: () => deps });
     const status = tools.find((t) => t.name === "hookdeck_status")!;
 
-    const result = (await status.execute({})) as {
+    const result = unwrap(await status.execute("call_1", {})) as {
       routes: { routeId: string }[];
       ledger: { persistence: string };
       configWarnings: unknown[];
@@ -138,7 +171,7 @@ describe("tool execution through the registered surface", () => {
     const { tools } = captureTools({ deps: () => deps });
     const doctor = tools.find((t) => t.name === "hookdeck_doctor")!;
 
-    const result = (await doctor.execute({})) as {
+    const result = unwrap(await doctor.execute("call_1", {})) as {
       ok: boolean;
       checks: { name: string; ok: boolean }[];
     };
@@ -159,7 +192,7 @@ describe("tool execution through the registered surface", () => {
 
     const { tools } = captureTools({ deps: () => deps });
     const status = tools.find((t) => t.name === "hookdeck_status")!;
-    const result = (await status.execute({})) as { ok: boolean; error: string };
+    const result = unwrap(await status.execute("call_1", {})) as { ok: boolean; error: string };
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("disk gone");
@@ -171,7 +204,7 @@ describe("tool execution through the registered surface", () => {
 
     for (const name of ["hookdeck_setup", "hookdeck_pause", "hookdeck_replay"]) {
       const tool = tools.find((t) => t.name === name)!;
-      const result = (await tool.execute({ routeId: "stripe", paused: true })) as {
+      const result = unwrap(await tool.execute("call_1", { routeId: "stripe", paused: true })) as {
         note?: string;
       };
       expect(String(result.note), name).toMatch(/API key/i);

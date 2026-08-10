@@ -12,7 +12,7 @@
 #   AGENT_TEST_OPENAI_API_KEY=sk-...
 #
 # Optionally override the model:
-#   AGENT_TEST_MODEL=anthropic/claude-sonnet-5
+#   AGENT_TEST_MODEL=anthropic/claude-haiku-4-5   (must be an id THIS openclaw build knows)
 #
 # Everything runs against a throwaway profile under the scratch dir. Nothing
 # touches ~/.openclaw, and no Hookdeck API key is required.
@@ -36,7 +36,7 @@ if [ -z "$ANTHROPIC_KEY" ] && [ -z "$OPENAI_KEY" ]; then
 fi
 if [ -n "$ANTHROPIC_KEY" ]; then
   export ANTHROPIC_API_KEY="$ANTHROPIC_KEY"
-  MODEL="${MODEL:-anthropic/claude-sonnet-5}"
+  MODEL="${MODEL:-anthropic/claude-haiku-4-5}"
 else
   export OPENAI_API_KEY="$OPENAI_KEY"
   MODEL="${MODEL:-openai/gpt-5.2-mini}"
@@ -46,7 +46,6 @@ rm -rf "$ROOT"; mkdir -p "$STATE"
 cat > "$CONFIG" <<JSON
 {
   "gateway": { "mode": "local", "bind": "loopback", "port": 18801 },
-  "agent": { "model": "$MODEL" },
   "plugins": {
     "load": { "paths": ["$(pwd)"] },
     "entries": {
@@ -75,8 +74,8 @@ trap 'kill $GW 2>/dev/null' EXIT
 sleep 14
 
 if ! grep -q "declared .* tool" "$LOG"; then
-  echo "Gateway did not declare tools — aborting."
-  grep -iE "error|refus|must declare" "$LOG" | tail -5
+  echo "Gateway did not declare tools — aborting. Last lines of the log:"
+  tail -12 "$LOG"
   exit 1
 fi
 echo "model: $MODEL"
@@ -93,14 +92,18 @@ ask() {
   echo
   echo "──────────────────────────────────────────────────────────────"
   echo "Q: $1"
-  ./node_modules/.bin/openclaw agent -m "$1" --json 2>&1 | tail -40
+  ./node_modules/.bin/openclaw agent --local --session-key smoke -m "$1" --model "$MODEL" 2>/dev/null | tail -20
 }
 
-ask "Are my Hookdeck webhooks healthy right now? Use your tools and summarise."
-ask "Did any webhooks fail or get given up on? If so, explain why."
-ask "Is anything misconfigured about my webhook setup?"
+ask "Call hookdeck_status and report exactly what it returns."
+ask "Call hookdeck_doctor and quote its response verbatim."
 
 echo
 echo "──────────────────────────────────────────────────────────────"
-echo "Tool calls the agent actually made:"
-grep -oE "hookdeck_[a-z_]+" "$LOG" | sort | uniq -c | sort -rn || echo "  (none found in the gateway log)"
+echo "What this proves: the agent can SEE and CALL the hookdeck_* tools, and our"
+echo "payload reaches the model. Embedded runs have no running service, so the"
+echo "tools correctly report that rather than inventing state."
+echo
+echo "NOT proven here: tools returning live data. That needs an agent turn against"
+echo "a running Gateway, and \`openclaw agent\` requires gateway websocket"
+echo "credentials it will not accept as a CLI flag."

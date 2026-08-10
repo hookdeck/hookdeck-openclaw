@@ -1,3 +1,4 @@
+import { jsonResult } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../plugin/host-api.js";
 import {
@@ -55,26 +56,35 @@ export interface RegisterToolsOptions {
 
 const NOT_STARTED = {
   ok: false,
-  note: "The Hookdeck plugin has not finished starting yet. Try again in a moment.",
+  note:
+    "The Hookdeck plugin's service is not running, so there is no live state to report. " +
+    "These tools operate on a running Gateway: start one with `openclaw gateway`. " +
+    "In an embedded run (`openclaw agent --local`) the service never starts, so this is the " +
+    "expected answer rather than a transient one.",
 };
 
 export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterToolsOptions): void {
+  // `AgentTool.execute` is `(toolCallId, params, signal?, onUpdate?)` and must
+  // resolve to an AgentToolResult — not the bare value a handler returns.
+  // Getting either wrong produces a tool the host accepts and the agent never
+  // sees, which is exactly how this shipped the first time.
   const wrap =
     <P>(handler: (deps: ToolDeps, params: P) => Promise<unknown>) =>
-    async (params: P): Promise<unknown> => {
+    async (_toolCallId: string, params: P) => {
       const deps = options.deps();
-      if (deps === undefined) return NOT_STARTED;
+      if (deps === undefined) return jsonResult(NOT_STARTED);
       try {
-        return await handler(deps, params);
+        return jsonResult(await handler(deps, params));
       } catch (err) {
         // A tool that throws is a worse experience than one that explains.
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        return jsonResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
       }
     };
 
-  const tools: { name: string; description: string; parameters: unknown; execute: unknown }[] = [
+  const tools: { name: string; label: string; description: string; parameters: unknown; execute: unknown }[] = [
     {
       name: "hookdeck_status",
+      label: "Hookdeck Status",
       description:
         "Health of the Hookdeck webhook pipeline: routes and their connections, in-flight capacity, " +
         "ledger persistence, dead-letter count, open Hookdeck issues, transport state and config warnings. " +
@@ -86,6 +96,7 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
     },
     {
       name: "hookdeck_recent_deliveries",
+      label: "Hookdeck Recent Deliveries",
       description:
         "Recent webhook deliveries that failed or were dead-lettered, joining the local ledger with our " +
         "own record of why. Answers 'did anything break overnight?'. Note that successful deliveries " +
@@ -101,6 +112,7 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
     },
     {
       name: "hookdeck_inspect_event",
+      label: "Hookdeck Inspect Event",
       description:
         "Everything known about one event: our ledger row, our dead-letter reason if any, and Hookdeck's " +
         "own status and attempt count. Answers 'why did this one fail?'.",
@@ -109,6 +121,7 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
     },
     {
       name: "hookdeck_doctor",
+      label: "Hookdeck Doctor",
       description:
         "Diagnoses the Hookdeck setup: signing secret, ledger persistence, interrupted work, API key, and " +
         "whether each connection's retry rule still covers every status this plugin emits. That last check " +
@@ -122,6 +135,7 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
     tools.push(
       {
         name: "hookdeck_setup",
+      label: "Hookdeck Setup",
         description:
           "Provisions Hookdeck connections for the configured routes. Defaults to a dry run that shows " +
           "what would change; pass dryRun false to apply.",
@@ -133,6 +147,7 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
       },
       {
         name: "hookdeck_pause",
+      label: "Hookdeck Pause",
         description:
           "Pauses or resumes a route's Hookdeck connection. While paused, events are held durably at HOLD " +
           "and delivered on resume — nothing is dropped. Use this for a planned or diagnosed outage, not " +
@@ -151,6 +166,7 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
       },
       {
         name: "hookdeck_replay",
+      label: "Hookdeck Replay",
         description:
           "Re-delivers events. Pass eventIds to retry specific events, or routeId plus sinceMinutes for a " +
           "scoped bulk replay of requests nothing was listening for. Bulk replay is a dry run unless " +
@@ -170,7 +186,7 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
   for (const tool of tools) {
     // Registered individually so an unsupported one cannot take the rest down.
     try {
-      api.registerTool(tool as never, { name: tool.name, optional: true });
+      api.registerTool(tool as never, { name: tool.name });
       registered.push(tool.name);
     } catch (err) {
       api.logger?.warn?.(`could not register ${tool.name}: ${String(err)}`);

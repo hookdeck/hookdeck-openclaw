@@ -281,7 +281,14 @@ Deliberately absent: `disable`, any delete, raw source/destination CRUD, transfo
 
 `hookdeck_setup`'s dry run returns a summary rather than the raw connection spec, because that spec carries `source.config.auth` and `destination.config.auth` — a provider webhook secret must not be echoed into a model's context just because someone asked what would change.
 
-> Registering tools requires `contracts.tools` in the plugin manifest, listing every tool name. Without it the host logs `plugin must declare contracts.tools` and silently registers nothing — it does not throw, so a plugin can look healthy while having no tool surface at all. A test asserts the manifest list matches the code.
+**The tools operate on a running Gateway.** In an embedded run (`openclaw agent --local`) the plugin's service never starts, so every tool reports that plainly rather than inventing empty state.
+
+> Two host requirements will silently produce a plugin with no tool surface, and neither throws:
+>
+> 1. **`contracts.tools` in the manifest**, listing every tool name. Without it the host logs `plugin must declare contracts.tools` and registers nothing.
+> 2. **The `AgentTool` contract**: a required `label`, an `execute(toolCallId, params, …)` signature, and an `AgentToolResult` return (use `jsonResult` from `openclaw/plugin-sdk/core`). Get any of these wrong and the host accepts the registration while the agent never sees the tool.
+>
+> Both shipped broken here first, with a clean typecheck and a passing suite. Tests now assert the manifest matches the code, every tool has a label, the execute arity is right, and the return is an `AgentToolResult`.
 
 ## Trust boundary
 
@@ -307,7 +314,7 @@ npm test
 npm run typecheck
 ```
 
-421 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+424 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 
