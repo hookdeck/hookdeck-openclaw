@@ -54,6 +54,8 @@ export interface JsonlStore<T> {
 const DEFAULT_COMPACTION_RATIO = 4;
 /** Below this, compaction churn costs more than the file it saves. */
 const COMPACTION_FLOOR = 64;
+/** Puts between opportunistic expiry sweeps, for modes where compaction never runs. */
+const EVICT_INTERVAL = 256;
 
 type Envelope<T> = { k: string; d?: T; x?: true };
 
@@ -67,6 +69,7 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
   let persistence: PersistenceState = persistent ? "active" : "off";
   let appended = 0;
   let compactions = 0;
+  let sinceEvict = 0;
   let firstError: string | undefined;
   // Serialises writes so a compaction can never interleave with an append.
   let queue: Promise<unknown> = Promise.resolve();
@@ -97,19 +100,27 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
     return JSON.stringify(envelope);
   }
 
-  function liveEnvelopes(): string[] {
+  /**
+   * Drops expired entries from memory. Compaction used to filter them out of
+   * the file while leaving them in the map, so a long-running process
+   * accumulated dead entries forever — the file stayed small and memory did not.
+   */
+  function evictExpired(): number {
     const stamp = now();
-    const lines: string[] = [];
+    let removed = 0;
     for (const [k, d] of memory) {
-      if (!isLive(d, stamp)) continue;
-      lines.push(serialise({ k, d }));
+      if (!isLive(d, stamp)) {
+        memory.delete(k);
+        removed += 1;
+      }
     }
-    return lines;
+    return removed;
   }
 
   async function compactNow(): Promise<void> {
+    evictExpired();
     if (!persistent || persistence !== "active" || path === undefined || io === undefined) return;
-    const lines = liveEnvelopes();
+    const lines = [...memory].map(([k, d]) => serialise({ k, d }));
     await io.writeAtomic(path, lines.length > 0 ? `${lines.join("\n")}\n` : "");
     appended = 0;
     compactions += 1;
@@ -128,11 +139,12 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
         const contents = await io.read(path);
         if (contents === undefined) return;
 
-        const stamp = now();
         let skipped = 0;
+        let lines = 0;
         for (const line of contents.split("\n")) {
           const trimmed = line.trim();
           if (trimmed.length === 0) continue;
+          lines += 1;
           let envelope: Envelope<T>;
           try {
             envelope = JSON.parse(trimmed) as Envelope<T>;
@@ -146,14 +158,13 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
           else if (envelope.d !== undefined) memory.set(envelope.k, envelope.d);
         }
 
-        // Drop expired entries on the way in rather than carrying them.
-        for (const [k, d] of [...memory]) {
-          if (!isLive(d, stamp)) memory.delete(k);
-        }
+        evictExpired();
 
-        if (skipped > 0 || memory.size * compactionRatio < contents.length / 100) {
-          await compactNow();
-        }
+        // Carry the on-disk line count forward, so a file that is already
+        // mostly dead weight is compacted promptly rather than after another
+        // COMPACTION_FLOOR appends.
+        appended = lines;
+        if (skipped > 0 || shouldCompact()) await compactNow();
       } catch (err) {
         degrade(err);
       }
@@ -170,6 +181,17 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
     async put(record) {
       const key = keyOf(record);
       memory.set(key, record);
+
+      // Eviction must not depend on persistence. Compaction is the usual
+      // trigger, but it runs inside `guarded()` and so is skipped entirely when
+      // the store is memory-only or has degraded — exactly the modes where
+      // nothing else would ever reclaim expired entries.
+      sinceEvict += 1;
+      if (sinceEvict >= EVICT_INTERVAL) {
+        sinceEvict = 0;
+        evictExpired();
+      }
+
       await guarded(async () => {
         await io!.append(path!, serialise({ k: key, d: record }));
         appended += 1;
@@ -186,19 +208,14 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
     },
 
     async prune() {
-      const stamp = now();
-      let removed = 0;
-      for (const [k, d] of [...memory]) {
-        if (!isLive(d, stamp)) {
-          memory.delete(k);
-          removed += 1;
-        }
-      }
+      const removed = evictExpired();
       if (removed > 0) await guarded(compactNow);
       return removed;
     },
 
     async compact() {
+      // Ahead of `guarded`, which no-ops when persistence is off or degraded.
+      evictExpired();
       await guarded(compactNow);
     },
 

@@ -4,11 +4,10 @@ import { decideAdmission } from "../protocol/admission.js";
 import { parseHookdeckDelivery, type HookdeckDelivery } from "../protocol/delivery.js";
 import {
   cancelRetries,
-  isRetryableStatus,
   ok,
   planToBody,
   renderRetryAfterHeader,
-  retryAfter,
+  deferFor,
   retryable,
   type ResponsePlan,
 } from "../protocol/outcome.js";
@@ -118,7 +117,11 @@ async function runPipeline(
   const pathname = pathnameOf(req.url);
   const matched = matchRoute(config, pathname);
   if (matched === undefined) {
-    return cancel("unknown_route", 404, `no enabled route for '${pathname}'`);
+    // Retryable, not cancelled: adding or enabling the route makes a later
+    // retry of this same event succeed. No Retry-After, so the connection's
+    // exponential rule spreads the attempts far enough for someone to notice.
+    logger.warn(`no enabled route for '${pathname}'`);
+    return { plan: retryable(404, "unknown_route", `no enabled route for '${pathname}'`), extra: {} };
   }
   const { routeId, route } = matched;
 
@@ -149,8 +152,10 @@ async function runPipeline(
   const secret = await deps.resolveSigningSecret(routeId, route);
   if (!secret) {
     logger.warn(`route '${routeId}': no signing secret resolved; rejecting with 503`);
+    // No Retry-After: a missing secret needs a human, and a fixed short
+    // interval would spend the 50-attempt ceiling in under half an hour.
     return {
-      plan: retryAfter(503, "no_signing_secret", 30, "signing secret is not configured"),
+      plan: retryable(503, "no_signing_secret", "signing secret is not configured"),
       extra: {},
       routeId,
     };
@@ -159,12 +164,12 @@ async function runPipeline(
   // 6. Parse Hookdeck headers.
   const delivery = parseHookdeckDelivery(req.headers, config.headerPrefix);
   if (!delivery.looksLikeHookdeck) {
-    return cancel(
-      "not_hookdeck",
-      400,
-      `no '${config.headerPrefix}-signature' header; is this request coming via Hookdeck?`,
-      routeId,
-    );
+    // Also retryable: setting the destination's auth to HOOKDECK_SIGNATURE
+    // makes Hookdeck sign subsequent retries of this same event, since the
+    // signature is computed at delivery time rather than stored.
+    const message = `no '${config.headerPrefix}-signature' header; is this request coming via Hookdeck, and is the destination's auth set to HOOKDECK_SIGNATURE?`;
+    logger.warn(`route '${routeId}': ${message}`);
+    return { plan: retryable(400, "not_hookdeck", message), extra: {}, routeId };
   }
 
   // 7. Signature, both slots. The second carries the previous secret during a
@@ -189,19 +194,16 @@ async function runPipeline(
 
   const eventId = delivery.eventId;
   if (eventId === undefined) {
-    return cancel(
-      "not_hookdeck",
-      400,
-      `no '${config.headerPrefix}-eventid' or 'idempotency-key' header; cannot deduplicate`,
-      routeId,
-      delivery,
-    );
+    // Correcting `headerPrefix` makes a retry of this same event parse.
+    const message = `no '${config.headerPrefix}-eventid' or 'idempotency-key' header; cannot deduplicate`;
+    logger.warn(`route '${routeId}': ${message}`);
+    return { plan: retryable(400, "no_event_id", message), extra: {}, routeId, delivery };
   }
 
   // 8. Admission control. BEFORE any ledger write.
   if (deps.inFlight.has(eventId)) {
     return {
-      plan: retryAfter(503, "in_flight", 5, "this event is already being processed"),
+      plan: deferFor(503, "in_flight", 5, "this event is already being processed"),
       extra: {},
       routeId,
       delivery,
@@ -210,7 +212,7 @@ async function runPipeline(
   if (!deps.inFlight.acquire(eventId)) {
     logger.debug(`route '${routeId}': at max_concurrent (${config.maxConcurrent}), deferring`);
     return {
-      plan: retryAfter(
+      plan: deferFor(
         503,
         "busy",
         config.busyRetryAfterSeconds,
@@ -289,9 +291,10 @@ async function runPipeline(
 
     await deps.ledger.settle(eventId, "failed");
     return {
-      plan: result.retryable
-        ? retryAfter(503, "dispatch_failed", 15, result.message)
-        : retryable(500, "dispatch_failed", result.message),
+      // Both branches leave pacing to the connection's exponential rule: a
+      // dispatch failure that repeats is exactly the case a fixed short
+      // interval would burn through.
+      plan: retryable(result.retryable ? 503 : 500, "dispatch_failed", result.message),
       extra: { eventId, lastAttempt: delivery.isLastAutomaticAttempt },
       routeId,
       delivery,
@@ -325,8 +328,11 @@ async function recordDeadLetter(deps: HandlerDeps, handled: HandledDelivery): Pr
 
   const { plan, delivery, routeId } = handled;
   const cancelled = plan.retry.kind === "cancel";
+  // Any non-2xx on the final automatic attempt loses the event, not just the
+  // codes we nominate as retryable — a 401 on the last attempt is just as gone
+  // as a 503.
   const lastAttemptFailure =
-    delivery?.isLastAutomaticAttempt === true && isRetryableStatus(plan.status);
+    delivery?.isLastAutomaticAttempt === true && plan.status >= 400;
 
   if (!cancelled && !lastAttemptFailure) return;
 

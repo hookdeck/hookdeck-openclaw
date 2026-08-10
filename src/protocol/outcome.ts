@@ -13,17 +13,28 @@
  */
 
 /**
- * The closed allowlist of situations permitted to cancel retries. Anything a
- * config change could fix is deliberately absent — a missing secret, an
- * unresolvable secretRef or a storage failure must stay retryable so the event
- * survives in Hookdeck and lands once the operator fixes it.
+ * The closed allowlist of situations permitted to cancel retries.
+ *
+ * The test for membership is precise, and stricter than "this request is
+ * invalid": **a retry of this exact event can never succeed, whatever the
+ * operator changes.** Hookdeck replays the stored request byte-for-byte, so
+ * anything baked into that request — its method, content type, size, or an
+ * unparseable body — will fail identically on every attempt.
+ *
+ * Deliberately absent, because an operator fix makes a later retry of the SAME
+ * event succeed:
+ *
+ *  - an unknown route (add or enable the route, and the retry matches);
+ *  - a missing signature header (set the destination's auth to
+ *    HOOKDECK_SIGNATURE — Hookdeck computes the signature at delivery time, so
+ *    retries are then signed);
+ *  - a missing event id (fix `headerPrefix` and the retry parses);
+ *  - a missing or unresolvable secret, or a storage failure.
  */
 export const CANCEL_REASONS = [
-  "unknown_route",
   "bad_method",
   "bad_content_type",
   "too_large",
-  "not_hookdeck",
   "malformed_json",
   "invalid_envelope",
   "forbidden_action",
@@ -60,12 +71,28 @@ export function accepted(code: string, message?: string): ResponsePlan {
   return { status: 202, code, message, retry: NO_RETRY, deadLetter: false };
 }
 
-/** A transient failure: ask Hookdeck to come back in `seconds`. */
-export function retryAfter(status: number, code: string, seconds: number, message?: string): ResponsePlan {
+/**
+ * Ask Hookdeck to come back in `seconds`.
+ *
+ * Use this ONLY where the condition is expected to clear in seconds — capacity,
+ * an in-flight duplicate, a Gateway still booting.
+ *
+ * `Retry-After` overrides the connection's retry rule entirely, which makes it a
+ * budget hazard on anything that might persist: at 30s a side, the 50-attempt
+ * ceiling is spent in 25 minutes and the event is gone, where the connection's
+ * exponential rule would have spread those attempts across up to a week. For a
+ * failure an operator has to notice and fix, that difference is the difference
+ * between recovering the event and losing it.
+ */
+export function deferFor(status: number, code: string, seconds: number, message?: string): ResponsePlan {
   return { status, code, retry: { kind: "after", seconds }, message, deadLetter: false };
 }
 
-/** A failure we want retried on Hookdeck's own schedule. */
+/**
+ * A failure retried on Hookdeck's own schedule. The right choice whenever the
+ * cause might persist, precisely because exponential backoff stretches the
+ * attempt budget out far enough for a human to intervene.
+ */
 export function retryable(status: number, code: string, message?: string): ResponsePlan {
   return { status, code, retry: NO_RETRY, message, deadLetter: false };
 }

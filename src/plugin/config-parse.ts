@@ -193,15 +193,34 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
   return { ok: true, config, warnings };
 }
 
-/** Resolve a request path to a route id. Exact match on `basePath + route.path`. */
+/**
+ * Resolves a request path to a route, matching the LONGEST configured route
+ * path that the request starts with.
+ *
+ * Prefix rather than exact, because Hookdeck appends the source request's path
+ * to the destination path unless `path_forwarding_disabled` is set — the
+ * default. A provider posting to `<source-url>/events` is delivered to
+ * `/hookdeck/stripe/events`, and exact matching would 404 perfectly good
+ * traffic. Longest-match keeps `/hookdeck/stripe` and `/hookdeck/stripe/refunds`
+ * unambiguous when both are configured.
+ */
 export function matchRoute(
   config: HookdeckPluginConfig,
   pathname: string,
 ): { routeId: string; route: RouteConfig } | undefined {
   const normalised = normalisePath(pathname);
+  let best: { routeId: string; route: RouteConfig; length: number } | undefined;
+
   for (const [routeId, route] of Object.entries(config.routes)) {
     if (!route.enabled) continue;
-    if (`${config.ingress.basePath}${route.path}` === normalised) return { routeId, route };
+    const full = `${config.ingress.basePath}${route.path}`;
+    // Either the path itself, or the path followed by a further segment. A bare
+    // string prefix would let `/hookdeck/stripe-test` match route `stripe`.
+    if (normalised !== full && !normalised.startsWith(`${full}/`)) continue;
+    if (best === undefined || full.length > best.length) {
+      best = { routeId, route, length: full.length };
+    }
   }
-  return undefined;
+
+  return best === undefined ? undefined : { routeId: best.routeId, route: best.route };
 }

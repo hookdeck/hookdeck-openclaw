@@ -10,7 +10,7 @@ import { resolveSecret, UnresolvedSecretError } from "./src/plugin/secrets.js";
 import { createWakeDispatcher, type Dispatcher } from "./src/dispatch/wake.js";
 import { createHookdeckClient } from "./src/hookdeck/client.js";
 import { handleDelivery, writePlan, type Logger } from "./src/ingress/handler.js";
-import { retryAfter } from "./src/protocol/outcome.js";
+import { deferFor, retryable } from "./src/protocol/outcome.js";
 import { reconcileOrphans } from "./src/recovery.js";
 import { createDeadLetterLog, type DeadLetterLog } from "./src/store/deadletter.js";
 import { createInFlightRegistry, type InFlightRegistry } from "./src/store/in-flight.js";
@@ -90,7 +90,7 @@ export default definePluginEntry({
     const respondStarting = (res: Parameters<typeof writePlan>[0]) =>
       writePlan(
         res,
-        { plan: retryAfter(503, "starting", 30, "plugin is still starting"), extra: {} },
+        { plan: deferFor(503, "starting", 30, "plugin is still starting"), extra: {} },
         { allowRetryCancel: config.safety.allowRetryCancel },
       );
 
@@ -140,7 +140,7 @@ export default definePluginEntry({
           // in Hookdeck rather than being acknowledged into the void.
           writePlan(
             res,
-            { plan: retryAfter(503, "internal_error", 30), extra: {} },
+            { plan: retryable(503, "internal_error"), extra: {} },
             { allowRetryCancel: config.safety.allowRetryCancel },
           );
         }

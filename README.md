@@ -99,12 +99,14 @@ You do not need to configure destination auth either. CLI destinations default t
 | `dedupe.ttlHours` | `168` | Ledger retention. Must exceed Hookdeck's one-week retry ceiling. |
 | `safety.allowRetryCancel` | `false` | See [Retry cancellation](#retry-cancellation). |
 | `routes.<id>.source` | — | **Required.** Hookdeck source name. |
-| `routes.<id>.path` | `/<id>` | Appended to `ingress.basePath`. |
+| `routes.<id>.path` | `/<id>` | Appended to `ingress.basePath`. Matched as a prefix — see below. |
 | `routes.<id>.dispatch.sessionKey` | — | **Required.** Session the event is enqueued against. |
 | `routes.<id>.dispatch.text` | `Webhook received from {source}` | Placeholders: `{source}`, `{eventId}`, `{routeId}`. |
 | `routes.<id>.dispatch.wakeMode` | `now` | `now` also requests an immediate heartbeat; `next-heartbeat` only enqueues. |
 
 `provider` is required on a secretRef — OpenClaw's own secret-input schema marks all three fields required and rejects unknown keys.
+
+**Route paths match as a prefix, longest first.** Hookdeck appends the source request's path to the destination path unless `path_forwarding_disabled` is set, which is not the default — so a provider posting to `<source-url>/events` arrives at `/hookdeck/stripe/events`. Exact matching would reject perfectly good traffic. A route named `stripe` will not swallow `/hookdeck/stripe-test`; only a further path segment counts.
 
 ## Response contract
 
@@ -114,18 +116,25 @@ Every status is chosen for what Hookdeck does next, not for HTTP tidiness. Any n
 |---|---|---|
 | Dispatched | `200` | — |
 | Duplicate attempt | `200` | — |
-| Wrong method / path / content type | `405` / `404` / `415` | cancel¹ |
+| Wrong method or content type | `405` / `415` | cancel¹ |
 | Body too large | `413` | cancel¹ |
-| Not a Hookdeck delivery, or no event id | `400` | cancel¹ |
-| Malformed JSON | `400` | cancel¹ |
-| No signing secret configured | `503` | `30` |
+| Malformed JSON, or not UTF-8 | `400` | cancel¹ |
+| No route matches the path | `404` | — |
+| Not a Hookdeck delivery, or no event id | `400` | — |
+| No signing secret configured | `503` | — |
 | Signature mismatch | `401` | — |
+| Dispatch failed | `503` / `500` | — |
 | Same event already in flight | `503` | `5` |
 | At `maxConcurrent` | `503` | `busyRetryAfterSeconds` |
-| Dispatch failed, transient | `503` | `15` |
 | Still starting | `503` | `30` |
 
 ¹ Only when `safety.allowRetryCancel` is enabled. See below.
+
+Two rules govern that table, and both are easy to get backwards.
+
+**Retries are cancelled only when a retry of that exact event can never succeed.** Hookdeck replays the stored request byte-for-byte, so anything baked into it — method, content type, size, an unparseable body — fails identically every time. Everything else stays retryable, because an operator fix makes a later retry of the *same* event succeed: adding a missing route, setting the destination's auth to `HOOKDECK_SIGNATURE` (Hookdeck computes signatures at delivery time, so retries are then signed), correcting `headerPrefix`, or supplying the signing secret.
+
+**`Retry-After` is only sent when the condition clears in seconds.** It overrides the connection's retry rule entirely, so a fixed short value is a budget hazard: at 30s a side, the 50-attempt ceiling is spent in 25 minutes and the event is gone. For anything needing a human — a missing secret, a repeated dispatch failure — the header is omitted so exponential backoff spreads the attempts across up to a week.
 
 **Configure your connection's retry rule to cover `500-599`, `429` and `408`.** A narrower rule turns admission control into silent data loss: the plugin defers with `503` expecting redelivery, and it never comes.
 

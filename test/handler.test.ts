@@ -125,9 +125,15 @@ describe("handleDelivery — rejections before any work", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("rejects an unknown path with 404", async () => {
-    const { deps } = harness();
-    expect((await handleDelivery(deps, request({ url: "/hookdeck/nope" }))).plan.status).toBe(404);
+  it("rejects an unknown path with a RETRYABLE 404", async () => {
+    // Not cancelled: adding or enabling the route makes a retry of this same
+    // event succeed, so cancelling would discard recoverable traffic.
+    const { deps, cancels } = harness();
+    const result = await handleDelivery(deps, request({ url: "/hookdeck/nope" }));
+    expect(result.plan.status).toBe(404);
+    expect(result.plan.retry).toEqual({ kind: "none" });
+    expect(result.plan.deadLetter).toBe(false);
+    expect(cancels).toEqual([]);
   });
 
   it("rejects a non-JSON content type with 415", async () => {
@@ -158,18 +164,41 @@ describe("handleDelivery — rejections before any work", () => {
     expect(result.plan.retry).toEqual({ kind: "none" });
   });
 
-  it("rejects a request with no Hookdeck signature header at all", async () => {
-    const { deps } = harness();
+  it("rejects a request with no Hookdeck signature header, retryably", async () => {
+    // Setting the destination's auth to HOOKDECK_SIGNATURE makes Hookdeck sign
+    // subsequent retries of this same event, so this is recoverable.
+    const { deps, cancels } = harness();
     const result = await handleDelivery(deps, request({ signature: null }));
     expect(result.plan.status).toBe(400);
     expect(result.plan.code).toBe("not_hookdeck");
+    expect(result.plan.retry).toEqual({ kind: "none" });
+    expect(cancels).toEqual([]);
   });
 
   it("refuses a delivery with no identity, since it cannot be deduplicated", async () => {
-    const { deps, dispatch } = harness();
+    const { deps, dispatch, cancels } = harness();
     const result = await handleDelivery(deps, request({ eventId: null }));
     expect(result.plan.status).toBe(400);
+    expect(result.plan.code).toBe("no_event_id");
+    // Correcting headerPrefix makes a retry parse, so this is recoverable too.
+    expect(cancels).toEqual([]);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("accepts a delivery on a sub-path, since Hookdeck forwards the source path", async () => {
+    // path_forwarding_disabled defaults to false, so a provider posting to
+    // <source-url>/events arrives at /hookdeck/stripe/events. Exact matching
+    // would 404 perfectly good traffic.
+    const { deps, dispatch } = harness();
+    const result = await handleDelivery(deps, request({ url: "/hookdeck/stripe/events" }));
+    expect(result.plan.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("does not let a route name prefix-match a longer sibling path", async () => {
+    const { deps } = harness();
+    const result = await handleDelivery(deps, request({ url: "/hookdeck/stripe-test" }));
+    expect(result.plan.status).toBe(404);
   });
 });
 
@@ -179,8 +208,16 @@ describe("handleDelivery — signing secret", () => {
     const result = await handleDelivery(deps, request());
     expect(result.plan.status).toBe(503);
     expect(result.plan.code).toBe("no_signing_secret");
-    expect(result.plan.retry).toEqual({ kind: "after", seconds: 30 });
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("sends NO Retry-After for a missing secret, to protect the retry budget", async () => {
+    // Retry-After overrides the connection's retry rule, so a fixed 30s here
+    // would spend all 50 attempts in 25 minutes — long before anyone notices a
+    // misconfigured secret. Exponential backoff spreads them across a week.
+    const { deps } = harness({ secret: undefined });
+    const result = await handleDelivery(deps, request());
+    expect(result.plan.retry).toEqual({ kind: "none" });
   });
 
   it("never cancels retries for a missing secret — a config change fixes it", async () => {

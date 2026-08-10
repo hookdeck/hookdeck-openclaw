@@ -193,3 +193,85 @@ describe("createJsonlStore — memory-only mode", () => {
     expect(store.stats().persistence).toBe("off");
   });
 });
+
+describe("createJsonlStore — expiry does not leak memory", () => {
+  it("evicts expired entries from memory during compaction, not just from the file", async () => {
+    // Compaction used to filter expired records out of the written file while
+    // leaving them in the map, so a long-running process grew forever even
+    // though the file stayed small.
+    let clock = 0;
+    const io = createFakeStoreIo();
+    const store = build(io, {
+      compactionRatio: 1,
+      isLive: (r, n) => n - r.createdAt < 1_000,
+      now: () => clock,
+    });
+    await store.load();
+
+    for (let i = 0; i < 100; i += 1) await store.put({ id: `k${i}`, value: i, createdAt: 0 });
+    expect(store.values()).toHaveLength(100);
+
+    clock = 10_000; // everything is now expired
+    await store.compact();
+
+    expect(store.values()).toHaveLength(0);
+    expect(store.stats().entries).toBe(0);
+    expect((io.files.get(PATH) ?? "").trim()).toBe("");
+  });
+
+  it("compacts a mostly-dead file promptly on load", async () => {
+    // `appended` used to reset to 0 after load, so a file left bloated by an
+    // ungraceful shutdown would not compact until COMPACTION_FLOOR fresh
+    // appends had accumulated. Plant the bloated file directly rather than
+    // trying to produce one, which the in-process compactor would prevent.
+    const io = createFakeStoreIo();
+    const bloated = Array.from(
+      { length: 500 },
+      (_, i) => JSON.stringify({ k: "same", d: { id: "same", value: i, createdAt: 0 } }),
+    ).join("\n");
+    io.files.set(PATH, `${bloated}\n`);
+
+    const store = build(io);
+    await store.load();
+
+    const after = (io.files.get(PATH) ?? "").split("\n").filter((l) => l).length;
+    expect(after).toBe(1);
+    expect(store.get("same")?.value).toBe(499);
+    expect(store.stats().compactions).toBe(1);
+  });
+});
+
+describe("createJsonlStore — expiry in modes where compaction never runs", () => {
+  it("evicts expired entries in memory-only mode", async () => {
+    // Compaction runs inside guarded(), which is skipped when persistence is
+    // 'off' — so without an independent sweep nothing would ever reclaim these.
+    let clock = 0;
+    const store = build(undefined, {
+      isLive: (r, n) => n - r.createdAt < 1_000,
+      now: () => clock,
+    });
+    await store.load();
+    for (let i = 0; i < 300; i += 1) await store.put({ id: `k${i}`, value: i, createdAt: clock });
+
+    clock = 10_000;
+    for (let i = 0; i < 300; i += 1) await store.put({ id: `n${i}`, value: i, createdAt: clock });
+
+    // The first 300 are long expired and must not still be held.
+    expect(store.get("k0")).toBeUndefined();
+    expect(store.values().length).toBeLessThanOrEqual(300);
+  });
+
+  it("evicts expired entries after persistence has degraded", async () => {
+    let clock = 0;
+    const io = createFakeStoreIo({ failAfter: 0 });
+    const store = build(io, { isLive: (r, n) => n - r.createdAt < 1_000, now: () => clock });
+    await store.load();
+    for (let i = 0; i < 300; i += 1) await store.put({ id: `k${i}`, value: i, createdAt: clock });
+    expect(store.stats().persistence).toBe("disabled");
+
+    clock = 10_000;
+    for (let i = 0; i < 300; i += 1) await store.put({ id: `n${i}`, value: i, createdAt: clock });
+
+    expect(store.get("k0")).toBeUndefined();
+  });
+});

@@ -177,3 +177,29 @@ describe("matchRoute", () => {
     expect(matchRoute(config, "/hookdeck/unknown")).toBeUndefined();
   });
 });
+
+describe("matchRoute — Hookdeck path forwarding", () => {
+  const { config } = parseOk({
+    signingSecret: "s",
+    routes: {
+      stripe: ROUTE,
+      stripeRefunds: { ...ROUTE, path: "/stripe/refunds" },
+    },
+  });
+
+  it("matches a sub-path, because Hookdeck appends the source request path", () => {
+    // path_forwarding_disabled defaults to false.
+    expect(matchRoute(config, "/hookdeck/stripe/events")?.routeId).toBe("stripe");
+    expect(matchRoute(config, "/hookdeck/stripe/a/b/c")?.routeId).toBe("stripe");
+  });
+
+  it("prefers the longest configured route path", () => {
+    expect(matchRoute(config, "/hookdeck/stripe/refunds")?.routeId).toBe("stripeRefunds");
+    expect(matchRoute(config, "/hookdeck/stripe/refunds/extra")?.routeId).toBe("stripeRefunds");
+  });
+
+  it("does not treat a longer sibling name as a sub-path", () => {
+    // A bare string prefix would wrongly match route `stripe` here.
+    expect(matchRoute(config, "/hookdeck/stripe-test")).toBeUndefined();
+  });
+});

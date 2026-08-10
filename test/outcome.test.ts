@@ -6,7 +6,7 @@ import {
   ok,
   planToBody,
   renderRetryAfterHeader,
-  retryAfter,
+  deferFor,
   retryable,
   RETRYABLE_STATUS_CODES,
 } from "../src/protocol/outcome.js";
@@ -18,15 +18,15 @@ describe("renderRetryAfterHeader", () => {
 
   it("renders whole seconds", () => {
     expect(
-      renderRetryAfterHeader(retryAfter(503, "busy", 30), { allowRetryCancel: false }),
+      renderRetryAfterHeader(deferFor(503, "busy", 30), { allowRetryCancel: false }),
     ).toBe("30");
   });
 
   it("rounds and floors at zero", () => {
-    expect(renderRetryAfterHeader(retryAfter(503, "busy", 1.4), { allowRetryCancel: false })).toBe(
+    expect(renderRetryAfterHeader(deferFor(503, "busy", 1.4), { allowRetryCancel: false })).toBe(
       "1",
     );
-    expect(renderRetryAfterHeader(retryAfter(503, "busy", -5), { allowRetryCancel: false })).toBe(
+    expect(renderRetryAfterHeader(deferFor(503, "busy", -5), { allowRetryCancel: false })).toBe(
       "0",
     );
   });
