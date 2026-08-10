@@ -23,6 +23,29 @@ import {
  * operators who want an agent that can diagnose but not act.
  */
 
+/**
+ * Every tool this plugin can register.
+ *
+ * Exported so a test can assert the manifest's `contracts.tools` matches. The
+ * host refuses `registerTool` for any name absent from that contract, and it
+ * LOGS the refusal rather than throwing — so a plugin that adds a tool and
+ * forgets the manifest looks entirely healthy while registering nothing.
+ */
+export const READ_TOOL_NAMES = [
+  "hookdeck_status",
+  "hookdeck_recent_deliveries",
+  "hookdeck_inspect_event",
+  "hookdeck_doctor",
+] as const;
+
+export const MUTATION_TOOL_NAMES = [
+  "hookdeck_setup",
+  "hookdeck_pause",
+  "hookdeck_replay",
+] as const;
+
+export const ALL_TOOL_NAMES = [...READ_TOOL_NAMES, ...MUTATION_TOOL_NAMES] as const;
+
 export interface RegisterToolsOptions {
   allowMutations: boolean;
   /** Absent before the service starts; tools report that rather than throwing. */
@@ -153,8 +176,12 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
       api.logger?.warn?.(`could not register ${tool.name}: ${String(err)}`);
     }
   }
+  // Deliberately "declared", not "registered": the host logs a refusal rather
+  // than throwing, so this count proves only that registerTool did not throw.
+  // The real signal is the absence of `must declare contracts.tools` in the
+  // Gateway log.
   api.logger?.info?.(
-    `registered ${registered.length} tool(s): ${registered.join(", ")}` +
+    `declared ${registered.length} tool(s): ${registered.join(", ")}` +
       (options.allowMutations ? "" : " (read-only: tools.allowMutations is false)"),
   );
 }

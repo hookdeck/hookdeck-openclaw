@@ -95,6 +95,9 @@ export interface HookdeckClient {
 
   listIssues(params?: { status?: string; limit?: number }): Promise<ApiResult<HookdeckIssue[]>>;
 
+  /** A real count. Counting a capped list reports the cap, not the truth. */
+  countIssues(params?: { status?: string }): Promise<ApiResult<number>>;
+
   bulkReplayRequests(params: {
     query: Record<string, unknown>;
     target: { webhook_ids?: string[]; source_id?: string };
@@ -204,6 +207,13 @@ export function createHookdeckClient(options: HookdeckClientOptions): HookdeckCl
       if (params.status !== undefined) query.set("status", params.status);
       const result = await request<{ models?: HookdeckIssue[] }>("GET", `/issues?${query}`);
       return result.ok ? { ok: true, data: result.data.models ?? [] } : result;
+    },
+
+    async countIssues(params = {}) {
+      const query = new URLSearchParams();
+      if (params.status !== undefined) query.set("status", params.status);
+      const result = await request<{ count?: number }>("GET", `/issues/count?${query}`);
+      return result.ok ? { ok: true, data: result.data.count ?? 0 } : result;
     },
 
     async bulkReplayRequests(params) {

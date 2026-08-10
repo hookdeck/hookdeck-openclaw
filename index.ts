@@ -177,6 +177,7 @@ export default definePluginEntry({
       schedule: (fn, ms) => {
         const timer = setTimeout(fn, ms);
         timer.unref?.();
+        return () => clearTimeout(timer);
       },
     });
 

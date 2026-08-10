@@ -35,6 +35,7 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
     getEvent: vi.fn(async () => ({ ok: true as const, data: { id: "evt_1", status: "FAILED", attempts: 3 } })),
     getEventBody: vi.fn(async () => ({ ok: true as const, data: {} })),
     listIssues: vi.fn(async () => ({ ok: true as const, data: [{ id: "iss_1" }] })),
+    countIssues: vi.fn(async () => ({ ok: true as const, data: 1 })),
     ...overrides,
   };
 }
@@ -145,6 +146,26 @@ describe("hookdeck_recent_deliveries", () => {
     });
     expect((await recentDeliveriesHandler(d, { routeId: "stripe" })).deadLetters).toHaveLength(0);
   });
+
+  it("filters before applying the limit, not after", async () => {
+    // Limiting a page and then filtering it silently returns fewer rows than
+    // the caller asked for.
+    const d = await deps();
+    for (let i = 0; i < 30; i += 1) {
+      await d.deadLetter.record({
+        eventId: `noise_${i}`, routeId: "other", code: "x", reason: "y",
+        retriesCancelled: false, lastAttempt: false,
+      });
+    }
+    for (let i = 0; i < 3; i += 1) {
+      await d.deadLetter.record({
+        eventId: `mine_${i}`, routeId: "stripe", code: "x", reason: "y",
+        retriesCancelled: false, lastAttempt: false,
+      });
+    }
+    const result = await recentDeliveriesHandler(d, { routeId: "stripe", limit: 20 });
+    expect(result.deadLetters).toHaveLength(3);
+  });
 });
 
 describe("hookdeck_inspect_event", () => {
@@ -205,16 +226,22 @@ describe("hookdeck_doctor", () => {
   });
 
   it("flags interrupted work left by a previous process", async () => {
+    // A real orphan: written by one instance, read by the next. The previous
+    // version of this test mutated a row the ledger no longer hands out, so it
+    // only ever asserted that a check existed.
+    const io = createFakeStoreIo();
+    const { createLedger } = await import("../src/store/ledger.js");
+    const first = await createLedger({ ttlHours: 168, instanceId: "boot-1", stateDir: "/s", io });
+    await first.begin("evt_crashed", 1, { routeId: "stripe" });
+    await first.close();
+
     const d = await deps();
-    d.ledger = createMemoryLedger({ ttlHours: 168, instanceId: "boot-2" });
-    await d.ledger.begin("evt_x", 1);
-    // Simulate a row owned by a dead instance.
-    const row = d.ledger.get("evt_x")!;
-    await d.ledger.settle("evt_x", "running");
-    Object.assign(row, { owner: "boot-1" });
+    d.ledger = await createLedger({ ttlHours: 168, instanceId: "boot-2", stateDir: "/s", io });
 
     const result = await doctorHandler(d);
-    expect(result.checks.some((c) => c.name === "interrupted work")).toBe(true);
+    const check = result.checks.find((c) => c.name === "interrupted work");
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toContain("1 row");
   });
 
   it("reports a missing api key as a real limitation", async () => {
@@ -227,6 +254,16 @@ describe("hookdeck_doctor", () => {
 });
 
 describe("hookdeck_setup", () => {
+  it("summarises rather than dumping the spec, which carries auth objects", async () => {
+    // `source.config.auth` and `destination.config.auth` hold provider
+    // secrets. A dry run must not echo them into a model's context.
+    const d = await deps();
+    const result = await setupHandler(d, {});
+    const serialised = JSON.stringify(result);
+    expect(serialised).not.toContain("auth");
+    expect(result.results?.[0]).toHaveProperty("summary");
+  });
+
   it("defaults to a dry run", async () => {
     const d = await deps();
     const result = await setupHandler(d, {});
@@ -275,6 +312,25 @@ describe("hookdeck_pause", () => {
     expect(schedule).toHaveBeenCalledOnce();
   });
 
+  it("replaces a pending auto-resume rather than stacking timers", async () => {
+    // Two timers means the older one can unpause a connection the agent has
+    // just deliberately re-paused.
+    const d = await deps();
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+    const cancels: string[] = [];
+    const schedule = (_fn: () => void, _ms: number) => {
+      const id = `t${cancels.length}`;
+      return () => cancels.push(id);
+    };
+
+    await pauseHandler(d, { routeId: "stripe", paused: true }, schedule);
+    await pauseHandler(d, { routeId: "stripe", paused: true }, schedule);
+    expect(cancels).toEqual(["t0"]);
+
+    await pauseHandler(d, { routeId: "stripe", paused: false });
+    expect(cancels).toEqual(["t0", "t1"]);
+  });
+
   it("resumes and clears the marker", async () => {
     const d = await deps();
     await d.cursors.patch("stripe", { connectionId: "web_1", pausedByUs: true });
@@ -298,6 +354,16 @@ describe("hookdeck_pause", () => {
     const result = await pauseHandler(await deps(), { routeId: "stripe", paused: true });
     expect(result.ok).toBe(false);
     expect(result.note).toMatch(/connectionId|setup/i);
+  });
+});
+
+describe("the ledger does not hand out mutable internal state", () => {
+  it("returns a copy, so a tool handler cannot corrupt the ledger", async () => {
+    const d = await deps();
+    await d.ledger.begin("evt_1", 1);
+    const row = d.ledger.get("evt_1")!;
+    row.status = "succeeded";
+    expect(d.ledger.get("evt_1")?.status).toBe("running");
   });
 });
 
@@ -334,9 +400,30 @@ describe("hookdeck_replay", () => {
     expect(result.note).toMatch(/eventIds|sinceMinutes/);
   });
 
-  it("caps how many explicit ids it will retry in one call", async () => {
+  it("caps explicit ids per call and SAYS what it dropped", async () => {
+    // Truncating quietly would let a caller who passed 250 ids and saw "ok"
+    // believe all 250 were retried.
     const d = await deps();
-    await replayHandler(d, { eventIds: Array.from({ length: 250 }, (_, i) => `evt_${i}`) });
+    const result = await replayHandler(d, {
+      eventIds: Array.from({ length: 250 }, (_, i) => `evt_${i}`),
+    });
     expect(d.client!.retryEvent).toHaveBeenCalledTimes(100);
+    expect(result).toMatchObject({ dropped: 150 });
+    expect(result.note).toMatch(/were not/i);
+  });
+});
+
+describe("manifest contracts.tools", () => {
+  it("lists exactly the tools the code can register", async () => {
+    // The host refuses registerTool for any name absent from this contract, and
+    // LOGS the refusal rather than throwing — so forgetting to update the
+    // manifest produces a plugin that looks healthy with no tool surface at
+    // all. That is precisely how this shipped broken the first time.
+    const { ALL_TOOL_NAMES } = await import("../src/tools/index.js");
+    const manifest = JSON.parse(
+      await (await import("node:fs/promises")).readFile("openclaw.plugin.json", "utf8"),
+    ) as { contracts?: { tools?: string[] } };
+
+    expect(manifest.contracts?.tools?.slice().sort()).toEqual([...ALL_TOOL_NAMES].sort());
   });
 });

@@ -71,8 +71,10 @@ export async function statusHandler(deps: ToolDeps, params: { routeId?: string }
 
   let openIssues: number | null = null;
   if (deps.client !== undefined) {
-    const issues = await deps.client.listIssues({ status: "OPENED", limit: 100 });
-    openIssues = issues.ok ? issues.data.length : null;
+    // Counted, not measured from a capped list — otherwise 500 open issues
+    // report as whatever the page size happens to be.
+    const issues = await deps.client.countIssues({ status: "OPENED" });
+    openIssues = issues.ok ? issues.data : null;
   }
 
   return {
@@ -99,14 +101,16 @@ export async function statusHandler(deps: ToolDeps, params: { routeId?: string }
 
 export async function recentDeliveriesHandler(
   deps: ToolDeps,
-  params: { routeId?: string; outcome?: "failed" | "succeeded" | "all"; limit?: number },
+  params: { routeId?: string; limit?: number },
 ) {
   const limit = Math.min(params.limit ?? 20, 100);
-  const outcome = params.outcome ?? "all";
 
+  // Filter first, then limit: filtering a pre-truncated page silently returns
+  // fewer rows than asked for.
   const local = deps.deadLetter
-    .list(limit)
-    .filter((r) => params.routeId === undefined || r.routeId === params.routeId);
+    .list(500)
+    .filter((r) => params.routeId === undefined || r.routeId === params.routeId)
+    .slice(0, limit);
 
   // Joined rather than returned separately: Hookdeck's view and ours disagree
   // precisely when something interesting happened.
@@ -125,16 +129,11 @@ export async function recentDeliveriesHandler(
     };
   });
 
-  const filtered =
-    outcome === "all"
-      ? rows
-      : rows.filter((r) => (outcome === "succeeded" ? r.ledgerStatus === "succeeded" : r.ledgerStatus !== "succeeded"));
-
   return {
-    deadLetters: filtered,
+    deadLetters: rows,
     note:
-      filtered.length === 0
-        ? "Nothing dead-lettered. Deliveries that succeeded leave no local record by design — check Hookdeck for the full event log."
+      rows.length === 0
+        ? "Nothing dead-lettered. Successful deliveries leave no local record by design, so an empty result means nothing has been given up on — not that nothing arrived. Use hookdeck_status for throughput, or Hookdeck's event log for the full picture."
         : undefined,
   };
 }
@@ -282,7 +281,25 @@ export async function setupHandler(
     const unchanged = deps.cursors.get(routeId)?.provisioningFingerprint === print;
 
     if (dryRun) {
-      results.push({ routeId, wouldApply: !unchanged, unchanged, spec });
+      // Summarised rather than dumped: the spec carries `source.config.auth`
+      // and `destination.config.auth`, and a provider webhook secret must not
+      // be echoed into a model's context because someone asked what would
+      // change.
+      results.push({
+        routeId,
+        wouldApply: !unchanged,
+        unchanged,
+        summary: {
+          connectionName: spec.name,
+          source: (spec.source as { name: string }).name,
+          destination: {
+            name: (spec.destination as { name: string }).name,
+            type: (spec.destination as { type: string }).type,
+          },
+          rules: spec.rules.map((r) => r.type),
+          retryStatuses: RETRYABLE_STATUS_CODES,
+        },
+      });
       continue;
     }
 
@@ -307,10 +324,22 @@ export async function setupHandler(
 
 export const DEFAULT_MAX_AUTO_RESUME_SECONDS = 3600;
 
+/**
+ * One pending auto-resume per route. Without this, pausing twice leaves two
+ * timers, and the older one can unpause a connection the agent has just
+ * deliberately re-paused.
+ */
+const autoResumeCancels = new Map<string, () => void>();
+
+export function cancelPendingAutoResume(routeId: string): void {
+  autoResumeCancels.get(routeId)?.();
+  autoResumeCancels.delete(routeId);
+}
+
 export async function pauseHandler(
   deps: ToolDeps,
   params: { routeId: string; paused: boolean; reason?: string; autoResumeAfterSeconds?: number },
-  schedule?: (fn: () => void, ms: number) => void,
+  schedule?: (fn: () => void, ms: number) => (() => void) | void,
 ) {
   const client = requireClient(deps);
   if (isError(client)) return { ok: false, note: client.error };
@@ -338,9 +367,12 @@ export async function pauseHandler(
       params.autoResumeAfterSeconds ?? DEFAULT_MAX_AUTO_RESUME_SECONDS,
       DEFAULT_MAX_AUTO_RESUME_SECONDS,
     );
-    schedule?.(() => {
+    cancelPendingAutoResume(params.routeId);
+    const cancel = schedule?.(() => {
+      autoResumeCancels.delete(params.routeId);
       void pauseHandler(deps, { routeId: params.routeId, paused: false });
     }, seconds * 1000);
+    if (typeof cancel === "function") autoResumeCancels.set(params.routeId, cancel);
 
     return {
       ok: true,
@@ -350,6 +382,8 @@ export async function pauseHandler(
     };
   }
 
+  // An explicit resume retires any pending auto-resume for this route.
+  cancelPendingAutoResume(params.routeId);
   const result = await client.unpauseConnection(cursor.connectionId);
   if (!result.ok) return { ok: false, note: result.message };
   await deps.cursors.patch(params.routeId, { pausedByUs: false });
@@ -368,12 +402,24 @@ export async function replayHandler(
   if (isError(client)) return { ok: false, note: client.error };
 
   if (params.eventIds !== undefined && params.eventIds.length > 0) {
+    const MAX_EVENT_IDS = 100;
+    const accepted = params.eventIds.slice(0, MAX_EVENT_IDS);
+    const dropped = params.eventIds.length - accepted.length;
     const outcomes = [];
-    for (const id of params.eventIds.slice(0, 100)) {
+    for (const id of accepted) {
       const result = await client.retryEvent(id);
       outcomes.push({ eventId: id, ok: result.ok, ...(result.ok ? {} : { error: result.message }) });
     }
-    return { ok: true, mode: "events", outcomes };
+    return {
+      ok: true,
+      mode: "events",
+      outcomes,
+      // Never truncate quietly: a caller who passed 250 ids and saw "ok" would
+      // reasonably believe all 250 were retried.
+      ...(dropped > 0
+        ? { dropped, note: `Only the first ${MAX_EVENT_IDS} ids were retried; ${dropped} were not. Call again with the rest.` }
+        : {}),
+    };
   }
 
   if (params.routeId === undefined || params.sinceMinutes === undefined) {

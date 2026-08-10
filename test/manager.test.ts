@@ -32,6 +32,7 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
     getEvent: vi.fn(async () => ({ ok: true as const, data: { id: "evt_1" } })),
     getEventBody: vi.fn(async () => ({ ok: true as const, data: {} })),
     listIssues: vi.fn(async () => ({ ok: true as const, data: [] })),
+    countIssues: vi.fn(async () => ({ ok: true as const, data: 0 })),
     ...overrides,
   };
 }

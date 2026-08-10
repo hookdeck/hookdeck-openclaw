@@ -82,7 +82,10 @@ function buildLedger(store: JsonlStore<LedgerRow>, options: LedgerOptions): Ledg
 
   return {
     get(eventId) {
-      return store.get(eventId);
+      // A copy: callers include tool handlers that hand rows to a model, and a
+      // mutable reference into the ledger is a footgun with no upside.
+      const row = store.get(eventId);
+      return row === undefined ? undefined : { ...row };
     },
 
     async begin(eventId, attempt, meta) {

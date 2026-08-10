@@ -261,7 +261,7 @@ Seven tools, matching the shared contract's five operator verbs plus two read to
 | `hookdeck_doctor` | What's misconfigured, including whether each connection's retry rule still covers every status we emit |
 | `hookdeck_setup` | Provisions connections. Dry run by default |
 | `hookdeck_pause` | Pause/resume a connection. Auto-resumes within an hour |
-| `hookdeck_replay` | Retry specific events, or a scoped bulk replay. Dry run unless `confirm: true` |
+| `hookdeck_replay` | Retry specific events, or a scoped bulk replay. Dry run unless `confirm: true`. Caps at 100 ids per call and says what it dropped |
 
 `tools.allowMutations: false` reduces this to the four read tools, for an agent that can diagnose but not act.
 
@@ -269,7 +269,9 @@ Three safety rails are deliberate. **`hookdeck_setup` defaults to a dry run**, s
 
 Deliberately absent: `disable`, any delete, raw source/destination CRUD, transformation overwrite. Their failure mode is irrecoverable event loss and an agent cannot judge the blast radius.
 
-> Registering tools requires `contracts.tools` in the plugin manifest, listing every tool name. Without it the host logs `plugin must declare contracts.tools` and silently registers nothing — it does not throw, so a plugin can look healthy while having no tool surface at all.
+`hookdeck_setup`'s dry run returns a summary rather than the raw connection spec, because that spec carries `source.config.auth` and `destination.config.auth` — a provider webhook secret must not be echoed into a model's context just because someone asked what would change.
+
+> Registering tools requires `contracts.tools` in the plugin manifest, listing every tool name. Without it the host logs `plugin must declare contracts.tools` and silently registers nothing — it does not throw, so a plugin can look healthy while having no tool surface at all. A test asserts the manifest list matches the code.
 
 ## Trust boundary
 
@@ -295,7 +297,7 @@ npm test
 npm run typecheck
 ```
 
-402 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+407 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 
