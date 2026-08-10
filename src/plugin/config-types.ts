@@ -77,6 +77,22 @@ export interface RouteConfig {
   signingSecret?: SecretInput;
   dispatch: DispatchConfig;
   /**
+   * Provider signature verification, applied by Hookdeck at the Source.
+   *
+   * This is a THIRD-PARTY secret — Stripe's `whsec_…`, GitHub's webhook secret
+   * — and it is not the same thing as `signingSecret`, which is Hookdeck's own
+   * project-level secret for signing deliveries to us. The plugin never sees or
+   * verifies this one: Hookdeck rejects an unverified request at the Request
+   * layer, so no event is created and nothing reaches the agent. Not
+   * reimplementing ~145 provider schemes is the point of the integration.
+   */
+  verification?: {
+    /** Hookdeck source auth type, e.g. `STRIPE`, `GITHUB`, `SHOPIFY`. */
+    provider: string;
+    /** Provider-specific credential fields, each a secret input. */
+    credentials: Record<string, SecretInput>;
+  };
+  /**
    * Hookdeck connection id. Only needed when `provisioning.enabled` is false:
    * pause-on-shutdown and catch-up both act on a connection, and without an id
    * they have nothing to act on. Provisioning discovers it automatically.

@@ -367,6 +367,61 @@
                 }
               ]
             },
+            "verification": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "credentials"
+              ],
+              "description": "Provider signature verification, applied by Hookdeck at the Source. This is a THIRD-PARTY secret (Stripe's whsec_..., GitHub's webhook secret), not the same as signingSecret which is Hookdeck's own. The plugin never verifies it \u2014 Hookdeck rejects unverified requests before an event is created.",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Hookdeck source auth type, e.g. STRIPE, GITHUB, SHOPIFY."
+                },
+                "credentials": {
+                  "type": "object",
+                  "description": "Provider-specific credential fields, each an inline string or a secretRef.",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "source",
+                          "provider",
+                          "id"
+                        ],
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "env",
+                              "file",
+                              "exec"
+                            ]
+                          },
+                          "provider": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
             "dispatch": {
               "oneOf": [
                 {

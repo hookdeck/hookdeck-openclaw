@@ -320,6 +320,27 @@ export default definePluginEntry({
             return { path: all[0] ?? name, all };
           },
           readVersion: readCliVersion,
+          resolveVerification: async (routeId) => {
+            const verification = config.routes[routeId]?.verification;
+            if (verification === undefined) return undefined;
+            const out: Record<string, string> = {};
+            for (const [field, input] of Object.entries(verification.credentials)) {
+              const value = await resolveSecret(
+                input,
+                `routes.${routeId}.verification.credentials.${field}`,
+                hostSecrets,
+              );
+              if (value === undefined) {
+                log.warn(
+                  `route '${routeId}': verification credential '${field}' did not resolve; ` +
+                    `provisioning will leave this source unverified`,
+                );
+                return undefined;
+              }
+              out[field] = value;
+            }
+            return out;
+          },
         });
 
         runtime = {

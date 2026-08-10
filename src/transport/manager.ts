@@ -39,6 +39,8 @@ export interface TransportManagerDeps {
    */
   apiKey?: string | undefined;
   resolveBinary(name: string): Promise<{ path: string; all: string[] }>;
+  /** Resolves a route's provider credentials; they are secret inputs like any other. */
+  resolveVerification?(routeId: string): Promise<Record<string, string> | undefined>;
   readVersion(path: string): Promise<string>;
   now?(): number;
 }
@@ -54,7 +56,9 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
   const now = deps.now ?? Date.now;
   const listeners = new Map<string, CliListener>();
 
-  function specFor(routeId: string, route: RouteConfig): ProvisionRouteSpec {
+  async function specFor(routeId: string, route: RouteConfig): Promise<ProvisionRouteSpec> {
+    const credentials =
+      route.verification !== undefined ? await deps.resolveVerification?.(routeId) : undefined;
     const path = `${config.ingress.basePath}${route.path}`;
     return {
       routeId,
@@ -66,6 +70,9 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
         : {}),
       ...(config.provisioning.dedupeWindowMs !== undefined
         ? { dedupeWindowMs: config.provisioning.dedupeWindowMs }
+        : {}),
+      ...(route.verification !== undefined && credentials !== undefined
+        ? { sourceAuthType: route.verification.provider, sourceAuth: credentials }
         : {}),
     };
   }
@@ -85,7 +92,7 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
 
     for (const [routeId, route] of Object.entries(config.routes)) {
       if (!route.enabled) continue;
-      const spec = buildConnectionSpec(specFor(routeId, route));
+      const spec = buildConnectionSpec(await specFor(routeId, route));
       const print = fingerprint(spec);
       const cursor = cursors.get(routeId);
 

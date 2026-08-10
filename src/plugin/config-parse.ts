@@ -60,6 +60,12 @@ const routeSchema = z.object({
   source: z.string().min(1),
   signingSecret: secretInputSchema.optional(),
   connectionId: z.string().min(1).optional(),
+  verification: z
+    .object({
+      provider: z.string().min(1),
+      credentials: z.record(z.string().min(1), secretInputSchema),
+    })
+    .optional(),
   dispatch: z.discriminatedUnion("mode", [
     wakeDispatchSchema,
     taskflowDispatchSchema,
@@ -229,6 +235,14 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       });
     }
 
+    if (route.verification === undefined) {
+      warnings.push({
+        path: `routes.${routeId}.verification`,
+        message:
+          "no provider verification configured, so Hookdeck accepts anything posted to this source's URL; set it to have Hookdeck verify the provider's own signature",
+      });
+    }
+
     if (route.dispatch.mode === "agent" && route.dispatch.deliver) {
       warnings.push({
         path: `routes.${routeId}.dispatch.deliver`,
@@ -244,6 +258,7 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       ...(route.signingSecret !== undefined ? { signingSecret: route.signingSecret } : {}),
       dispatch: route.dispatch,
       ...(route.connectionId !== undefined ? { connectionId: route.connectionId } : {}),
+      ...(route.verification !== undefined ? { verification: route.verification } : {}),
       ...(route.filters !== undefined ? { filters: route.filters } : {}),
     };
   }

@@ -101,12 +101,22 @@ You do not need to configure destination auth either. CLI destinations default t
 | `safety.allowRetryCancel` | `false` | See [Retry cancellation](#retry-cancellation). |
 | `routes.<id>.source` | — | **Required.** Hookdeck source name. |
 | `routes.<id>.path` | `/<id>` | Appended to `ingress.basePath`. Matched as a prefix — see below. |
+| `routes.<id>.verification` | — | Provider signature verification at the Hookdeck source: `{provider: "STRIPE", credentials: {webhook_secret_key: …}}`. See below. |
 | `routes.<id>.connectionId` | — | Only needed when provisioning is off. Pause-on-shutdown and catch-up act on a connection id, so without one they are silently inert; the plugin warns at startup if that applies. |
 | `routes.<id>.dispatch.sessionKey` | — | **Required.** Session the event is enqueued against. |
 | `routes.<id>.dispatch.text` | `Webhook received from {source}` | Placeholders: `{source}`, `{eventId}`, `{routeId}`. |
 | `routes.<id>.dispatch.wakeMode` | `now` | `now` also requests an immediate heartbeat; `next-heartbeat` only enqueues. |
 
 `provider` is required on a secretRef — OpenClaw's own secret-input schema marks all three fields required and rejects unknown keys.
+
+### Two different secrets
+
+These are easy to conflate and they come from different parties:
+
+- **`signingSecret`** is **Hookdeck's own**, project-level, from Settings → Project → Secrets. Hookdeck signs its deliveries *to you* with it, and this plugin verifies that signature. Without it, every delivery is rejected with a retryable `503`.
+- **`routes.<id>.verification.credentials`** is the **provider's** — Stripe's `whsec_…`, GitHub's webhook secret. It goes on the Hookdeck *source*, and **Hookdeck** uses it to verify the provider's own signature at ingest. This plugin never sees it. Verification failure is rejected at Hookdeck's request layer, so no event is created and nothing reaches your agent.
+
+Not reimplementing ~145 provider schemes is the point of the integration. Configure verification and Hookdeck does it; leave it out and Hookdeck accepts anything posted to the source URL, which the plugin warns about at startup.
 
 **Route paths match as a prefix, longest first.** Hookdeck appends the source request's path to the destination path unless `path_forwarding_disabled` is set, which is not the default — so a provider posting to `<source-url>/events` arrives at `/hookdeck/stripe/events`. Exact matching would reject perfectly good traffic. A route named `stripe` will not swallow `/hookdeck/stripe-test`; only a further path segment counts.
 
@@ -297,7 +307,7 @@ npm test
 npm run typecheck
 ```
 
-407 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+421 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 
