@@ -315,3 +315,51 @@ describe("the manifest schema and the config parser must agree", () => {
     );
   });
 });
+
+describe("validation that runs late still rejects", () => {
+  // Every rule must run before the first `ok: false` return, or a check placed
+  // after it silently never fires.
+  const base = {
+    signingSecret: "whsec",
+    routes: { s: { source: "s", dispatch: { mode: "wake", sessionKey: "m" } } },
+  };
+
+  it("rejects provisioning without an apiKey", () => {
+    const result = parseHookdeckConfig({
+      ...base,
+      provisioning: { enabled: true },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problems.map((p) => p.path)).toContain(
+        "provisioning.enabled",
+      );
+    }
+  });
+
+  it("rejects http transport without a publicUrl", () => {
+    const result = parseHookdeckConfig({
+      ...base,
+      transport: { mode: "http" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problems.map((p) => p.path)).toContain(
+        "transport.publicUrl",
+      );
+    }
+  });
+
+  it("still reports an early problem when a late rule also fails", () => {
+    const result = parseHookdeckConfig({
+      ingress: { basePath: "/" },
+      transport: { mode: "http" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const paths = result.problems.map((p) => p.path);
+      expect(paths).toContain("ingress.basePath");
+      expect(paths).toContain("transport.publicUrl");
+    }
+  });
+});

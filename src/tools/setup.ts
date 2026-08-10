@@ -4,7 +4,12 @@ import {
   routeProvisionSpec,
 } from "../hookdeck/provision.js";
 import { RETRYABLE_STATUS_CODES } from "../protocol/outcome.js";
-import { requireClient, isError, type ToolDeps } from "./deps.js";
+import {
+  requireClient,
+  isError,
+  requireWritableState,
+  type ToolDeps,
+} from "./deps.js";
 
 /**
  * `hookdeck_setup` — provisions the connections a route needs. Dry run by
@@ -19,6 +24,18 @@ export async function setupHandler(
   if (isError(client)) return { applied: false, note: client.error };
 
   const dryRun = params.dryRun ?? true;
+
+  // A dry run writes nothing, so it is fine from a reader. Applying records the
+  // connection id and the provisioning fingerprint, and without those a later
+  // pause or replay cannot find the connection setup just made.
+  if (!dryRun) {
+    const unwritable = requireWritableState(
+      deps,
+      "Applying a provisioning change",
+    );
+    if (unwritable !== undefined)
+      return { applied: false, note: unwritable.error };
+  }
   const results: Record<string, unknown>[] = [];
 
   for (const [routeId, route] of Object.entries(deps.config.routes)) {

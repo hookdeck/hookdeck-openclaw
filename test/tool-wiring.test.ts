@@ -309,3 +309,17 @@ describe("hookdeck_issues is actually reachable", () => {
     expect(tool.parameters.required ?? []).toEqual([]);
   });
 });
+
+describe("declared parameters match what the handlers read", () => {
+  it("does not advertise a filter hookdeck_recent_deliveries ignores", () => {
+    // A parameter a model can set that changes nothing is worse than no
+    // parameter: it reads as a capability.
+    const tool = captureTools({}).tools.find(
+      (t) => t.name === "hookdeck_recent_deliveries",
+    )!;
+    expect(Object.keys(tool.parameters.properties ?? {}).sort()).toEqual([
+      "limit",
+      "routeId",
+    ]);
+  });
+});

@@ -36,12 +36,29 @@ export const nodeSpawnChild: SpawnChild = (command, args, env): ChildHandle => {
         index = buffer.indexOf("\n");
       }
     });
+    stream?.on("end", () => {
+      // A child that dies mid-line still said something worth keeping.
+      const rest = buffer.trimEnd();
+      buffer = "";
+      if (rest.length > 0) lineCbs.forEach((cb) => cb(rest));
+    });
   }
 
-  child.on("error", (err) =>
-    lineCbs.forEach((cb) => cb(`spawn error: ${err.message}`)),
-  );
-  child.on("exit", (code, signal) => exitCbs.forEach((cb) => cb(code, signal)));
+  let exited = false;
+  const reportExit = (code: number | null, signal: string | null): void => {
+    if (exited) return;
+    exited = true;
+    exitCbs.forEach((cb) => cb(code, signal));
+  };
+
+  // `error` fires WITHOUT an `exit` for ENOENT, EACCES and EAGAIN — a missing
+  // or unreadable binary. The supervisor restarts from exits alone, so without
+  // this it would wait in `starting` forever and never record the disconnect.
+  child.on("error", (err) => {
+    lineCbs.forEach((cb) => cb(`spawn error: ${err.message}`));
+    reportExit(null, null);
+  });
+  child.on("exit", (code, signal) => reportExit(code, signal));
 
   return {
     kill: (signal) => {

@@ -116,7 +116,6 @@ describe("taskflow dispatch — the status taxonomy", () => {
       kind: "cancel",
       reason: "flow_revision_conflict",
     });
-    expect(outcome.plan.deadLetter).toBe(true);
     // The caller needs the current revision to correct and re-send.
     expect(outcome.plan.message).toContain("7");
   });
@@ -133,7 +132,6 @@ describe("taskflow dispatch — the status taxonomy", () => {
 
     expect(outcome.plan.status).toBe(404);
     expect(outcome.plan.retry).toEqual({ kind: "none" });
-    expect(outcome.plan.deadLetter).toBe(false);
   });
 
   it("cancels when the flow is not managed by this controller", async () => {

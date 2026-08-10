@@ -14,7 +14,9 @@ export async function recentDeliveriesHandler(
   deps: ToolDeps,
   params: { routeId?: string; limit?: number },
 ) {
-  const limit = Math.min(params.limit ?? 20, 100);
+  // Clamped at both ends: a negative limit reaches `slice(0, -1)` and returns
+  // nearly the whole log, which is what the cap exists to prevent.
+  const limit = Math.min(Math.max(params.limit ?? 20, 1), 100);
 
   // Filter first, then limit: filtering a pre-truncated page silently returns
   // fewer rows than asked for.

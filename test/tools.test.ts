@@ -1201,3 +1201,72 @@ describe("issues name the connection, not just its id", () => {
     expect(d.client!.getConnection).not.toHaveBeenCalled();
   });
 });
+
+describe("tools that must record state refuse to run from a read-only view", () => {
+  // A disk view opens the stores read-only, so writes are silent no-ops. A tool
+  // that changes Hookdeck and then fails to record it leaves state nothing will
+  // reconcile.
+  it("refuses to pause, rather than pausing with no durable marker", async () => {
+    const d = await deps({ source: "disk" });
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+
+    const result = await pauseHandler(d, { routeId: "stripe", paused: true });
+    expect(result.ok).toBe(false);
+    expect(String(result.note)).toMatch(/nothing has been changed/i);
+    expect(d.client!.pauseConnection).not.toHaveBeenCalled();
+  });
+
+  it("refuses to resume from a read-only view too", async () => {
+    const d = await deps({ source: "disk" });
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+    const result = await pauseHandler(d, { routeId: "stripe", paused: false });
+    expect(result.ok).toBe(false);
+    expect(d.client!.unpauseConnection).not.toHaveBeenCalled();
+  });
+
+  it("refuses to apply provisioning, which would strand the connection id", async () => {
+    const d = await deps({ source: "disk" });
+    const result = await setupHandler(d, { dryRun: false });
+    expect(result.applied).toBe(false);
+    expect(d.client!.upsertConnection).not.toHaveBeenCalled();
+  });
+
+  it("still allows a dry run, which records nothing", async () => {
+    const d = await deps({ source: "disk" });
+    const result = await setupHandler(d, { dryRun: true });
+    expect(result.dryRun).toBe(true);
+    expect(result.results?.length).toBeGreaterThan(0);
+  });
+
+  it("leaves the live path untouched", async () => {
+    const d = await deps();
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+    const result = await pauseHandler(
+      d,
+      { routeId: "stripe", paused: true },
+      () => () => {},
+    );
+    expect(result.ok).toBe(true);
+    expect(d.client!.pauseConnection).toHaveBeenCalled();
+  });
+});
+
+describe("limits are clamped at both ends", () => {
+  it("does not turn a negative limit into nearly the whole log", async () => {
+    const d = await deps();
+    for (let i = 0; i < 30; i += 1) {
+      await d.deadLetter.record({
+        eventId: `evt_${i}`,
+        routeId: "stripe",
+        code: "c",
+        reason: "r",
+        retriesCancelled: false,
+        lastAttempt: true,
+      });
+    }
+    const result = await recentDeliveriesHandler(d, { limit: -1 });
+    const rows =
+      result.unreportedFailures.length + result.locallyRecorded.length;
+    expect(rows).toBe(1);
+  });
+});

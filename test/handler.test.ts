@@ -160,7 +160,6 @@ describe("handleDelivery — rejections before any work", () => {
     );
     expect(result.plan.status).toBe(404);
     expect(result.plan.retry).toEqual({ kind: "none" });
-    expect(result.plan.deadLetter).toBe(false);
     expect(cancels).toEqual([]);
   });
 
@@ -297,11 +296,12 @@ describe("handleDelivery — deduplication", () => {
     expect(dispatch).toHaveBeenCalledTimes(2);
   });
 
-  it("does not re-dispatch a succeeded event even on a higher attempt", async () => {
+  it("re-dispatches a succeeded event on a higher attempt", async () => {
+    // Deliberate: the rule is attempt-based, so a manual retry of an event that
+    // already succeeded runs again. A guard here would silently ignore an
+    // operator who explicitly asked for the redelivery.
     const { deps, dispatch } = harness();
     await handleDelivery(deps, request({ attemptCount: "1" }));
-    // A higher attempt after success still runs — the rule is attempt-based, so
-    // this documents the deliberate behaviour rather than asserting a guard.
     const second = await handleDelivery(deps, request({ attemptCount: "2" }));
     expect(second.plan.status).toBe(200);
     expect(dispatch).toHaveBeenCalledTimes(2);
@@ -401,13 +401,16 @@ describe("handleDelivery — admission control", () => {
     expect(inFlight.size).toBe(0);
   });
 
-  it("releases capacity even when dispatch throws", async () => {
+  it("releases capacity when dispatch throws", async () => {
+    // The throw is turned into a retryable response rather than propagating,
+    // so the caller always gets a plan and the slot is always released.
     const { deps, inFlight } = harness({
       dispatch: async () => {
         throw new Error("kaboom");
       },
     });
-    await expect(handleDelivery(deps, request())).rejects.toThrow("kaboom");
+    const result = await handleDelivery(deps, request());
+    expect(result.plan.status).toBe(503);
     expect(inFlight.size).toBe(0);
   });
 });
@@ -421,7 +424,6 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
       kind: "cancel",
       reason: "malformed_json",
     });
-    expect(result.plan.deadLetter).toBe(true);
     expect(cancels).toEqual(["malformed_json"]);
   });
 
@@ -455,7 +457,6 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
 
       expect(result.plan.status).toBe(400);
       expect(result.plan.code).toBe("malformed_json");
-      expect(result.plan.deadLetter).toBe(true);
       expect(dispatch).not.toHaveBeenCalled();
     });
 
@@ -994,5 +995,97 @@ describe("secret rotation — the drill", () => {
     expect(result.plan.status).toBe(503);
     expect(result.plan.retry.kind).not.toBe("cancel");
     expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("the dead-letter log is not reachable by unauthenticated traffic", () => {
+  // The ingress is publicly reachable and the log is bounded, evicting
+  // oldest-first. Recording pre-verification rejections would let a scanner
+  // push out post-2xx agent failures, which for a CLI destination are the only
+  // record that exists anywhere.
+  async function withLog(config?: HookdeckPluginConfig) {
+    const deadLetter = await createDeadLetterLog({ ttlHours: 168 });
+    const h = harness(config === undefined ? {} : { config });
+    h.deps.deadLetter = deadLetter;
+    return { ...h, deadLetter };
+  }
+
+  it("records nothing for a wrong method", async () => {
+    const { deps, deadLetter } = await withLog();
+    await handleDelivery(deps, request({ method: "GET" }));
+    expect(deadLetter.count()).toBe(0);
+  });
+
+  it("records nothing for a wrong content type", async () => {
+    const { deps, deadLetter } = await withLog();
+    await handleDelivery(deps, request({ contentType: "text/plain" }));
+    expect(deadLetter.count()).toBe(0);
+  });
+
+  it("records nothing for a bad signature", async () => {
+    const { deps, deadLetter } = await withLog();
+    await handleDelivery(deps, request({ signature: "not-a-signature" }));
+    expect(deadLetter.count()).toBe(0);
+  });
+
+  it("records nothing for a request that is not from Hookdeck at all", async () => {
+    const { deps, deadLetter } = await withLog();
+    await handleDelivery(deps, request({ signature: null }));
+    expect(deadLetter.count()).toBe(0);
+  });
+
+  it("still records a verified request we cancel retries for", async () => {
+    // The point of the log: past verification, a malformed payload is a real
+    // failure worth keeping.
+    const { deps, deadLetter } = await withLog();
+    await handleDelivery(deps, request({ body: "{not json" }));
+    expect(deadLetter.list()[0]).toMatchObject({ code: "malformed_json" });
+  });
+});
+
+describe("a dispatcher that throws must not strand the ledger row", () => {
+  it("settles the row failed and answers retryably", async () => {
+    // Without this, the row stays `running` owned by a live instance: invisible
+    // to listOrphans, counted in stats().running forever, and never
+    // dead-lettered even on the final attempt.
+    const { deps, ledger } = harness({
+      dispatch: async () => {
+        throw new Error("host went away");
+      },
+    });
+
+    const result = await handleDelivery(deps, request());
+
+    expect(result.plan.status).toBe(503);
+    expect(result.plan.code).toBe("dispatch_error");
+    expect(result.plan.retry.kind).not.toBe("cancel");
+    expect(ledger.get("evt_1")?.status).toBe("failed");
+    expect(ledger.stats().running).toBe(0);
+  });
+
+  it("dead-letters it on the final attempt, like any other failure", async () => {
+    const deadLetter = await createDeadLetterLog({ ttlHours: 168 });
+    const { deps } = harness({
+      dispatch: async () => {
+        throw new Error("host went away");
+      },
+    });
+    deps.deadLetter = deadLetter;
+
+    await handleDelivery(deps, request());
+    expect(deadLetter.list()[0]).toMatchObject({
+      code: "dispatch_error",
+      lastAttempt: true,
+    });
+  });
+
+  it("releases the in-flight slot", async () => {
+    const { deps, inFlight } = harness({
+      dispatch: async () => {
+        throw new Error("boom");
+      },
+    });
+    await handleDelivery(deps, request());
+    expect(inFlight.size).toBe(0);
   });
 });

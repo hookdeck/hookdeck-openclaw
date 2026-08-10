@@ -221,3 +221,28 @@ describe("ledger — degradation", () => {
     expect(ledger.stats()).toMatchObject({ entries: 2, running: 1 });
   });
 });
+
+describe("the agent retry budget spans an event's whole life", () => {
+  it("carries agentRetries across redeliveries", async () => {
+    // `begin` runs on every admitted delivery. Rebuilding the row without this
+    // field resets the budget each round trip, so a permanently failing run
+    // retries without limit and never reaches `exhausted`.
+    const ledger = createMemoryLedger({ ttlHours: 168, instanceId: "t" });
+
+    await ledger.begin("evt_1", 1);
+    await ledger.settle("evt_1", "failed", { agentRetries: 1 });
+
+    await ledger.begin("evt_1", 2);
+    expect(ledger.get("evt_1")?.agentRetries).toBe(1);
+
+    await ledger.settle("evt_1", "failed", { agentRetries: 2 });
+    await ledger.begin("evt_1", 3);
+    expect(ledger.get("evt_1")?.agentRetries).toBe(2);
+  });
+
+  it("leaves it absent for an event that has never retried", async () => {
+    const ledger = createMemoryLedger({ ttlHours: 168, instanceId: "t" });
+    await ledger.begin("evt_2", 1);
+    expect(ledger.get("evt_2")?.agentRetries).toBeUndefined();
+  });
+});

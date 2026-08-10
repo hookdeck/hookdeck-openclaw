@@ -123,6 +123,12 @@ function buildLedger(
         status: "running",
         updatedAt: now(),
         owner: options.instanceId,
+        // Carried across redeliveries. The agent retry budget is spent over an
+        // event's whole life, not per delivery, so dropping it here would let a
+        // permanently failing run retry without limit.
+        ...(existing?.agentRetries !== undefined
+          ? { agentRetries: existing.agentRetries }
+          : {}),
         ...(meta?.routeId !== undefined ? { routeId: meta.routeId } : {}),
       };
       // Awaited on purpose: this write is the boundary before which we must not

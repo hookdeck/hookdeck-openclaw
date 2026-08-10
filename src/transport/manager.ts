@@ -75,6 +75,21 @@ export function createTransportManager(
   const now = deps.now ?? Date.now;
   const listeners = new Map<string, CliListener>();
 
+  /**
+   * Stamps the start of an outage, once.
+   *
+   * The listener exits on every failed respawn during backoff and on clean
+   * shutdown too. Overwriting the stamp each time slides the catch-up window
+   * forward, so the events from the original outage fall outside every window
+   * that is ever queried and are never replayed. The cursor is cleared after a
+   * successful catch-up, so an existing value always means "not yet
+   * recovered" and must be left alone.
+   */
+  async function recordDisconnect(routeId: string): Promise<void> {
+    if (cursors.get(routeId)?.lastDisconnectAt !== undefined) return;
+    await cursors.patch(routeId, { lastDisconnectAt: now() });
+  }
+
   async function specFor(
     routeId: string,
     route: RouteConfig,
@@ -233,7 +248,7 @@ export function createTransportManager(
         {
           spawn: deps.spawn,
           logger,
-          onDisconnect: (id) => cursors.patch(id, { lastDisconnectAt: now() }),
+          onDisconnect: (id) => recordDisconnect(id),
           now,
         },
       );

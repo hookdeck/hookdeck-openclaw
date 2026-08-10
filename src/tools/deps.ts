@@ -79,3 +79,26 @@ export function requireClient(
 export function isError(value: unknown): value is { error: string } {
   return typeof value === "object" && value !== null && "error" in value;
 }
+
+/**
+ * Refuses a tool that must record something, when this view cannot record.
+ *
+ * A disk view opens every store read-only, so writes are silent no-ops. That is
+ * correct for a reader — the Gateway owns those files — but a tool that pauses
+ * a connection at Hookdeck and then fails to persist `pausedByUs` leaves an
+ * outage nothing will lift: the next Gateway start finds no breadcrumb and
+ * never unpauses. Refusing is the only honest answer, since the write cannot be
+ * made from here.
+ */
+export function requireWritableState(
+  deps: ToolDeps,
+  action: string,
+): { error: string } | undefined {
+  if (deps.source === "live") return undefined;
+  return {
+    error:
+      `${action} has to record state that only the Gateway process can write, and this call is ` +
+      `reading from the state files instead. Run it from the Gateway, or perform the change in the ` +
+      `Hookdeck dashboard. Nothing has been changed.`,
+  };
+}

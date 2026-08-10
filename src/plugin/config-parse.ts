@@ -310,8 +310,6 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     });
   }
 
-  if (problems.length > 0) return { ok: false, problems };
-
   if (value.recovery.enabled && value.apiKey === undefined) {
     warnings.push({
       path: "apiKey",
@@ -337,6 +335,10 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
         "http transport requires transport.publicUrl so the destination can be provisioned",
     });
   }
+
+  // After every rule, never before one: a check that runs past this point would
+  // push a problem nobody reads.
+  if (problems.length > 0) return { ok: false, problems };
 
   if (!value.storage.enabled) {
     warnings.push({

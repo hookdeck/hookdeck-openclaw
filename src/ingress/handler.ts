@@ -18,7 +18,7 @@ import {
   type ResponsePlan,
 } from "../protocol/outcome.js";
 import { verifyHookdeckSignature } from "../protocol/signature.js";
-import type { Dispatcher } from "../dispatch/types.js";
+import type { DispatchOutcome, Dispatcher } from "../dispatch/types.js";
 import { evaluateFilters } from "../protocol/filters.js";
 import type { DeadLetterLog } from "../store/deadletter.js";
 import type { InFlightRegistry } from "../store/in-flight.js";
@@ -67,6 +67,13 @@ export interface HandledDelivery {
   extra: Record<string, unknown>;
   routeId?: string;
   delivery?: HookdeckDelivery;
+  /**
+   * Whether this request's signature was verified.
+   *
+   * Only what is past verification may be dead-lettered: the ingress is public,
+   * and the log is bounded and evicts oldest-first.
+   */
+  verified?: boolean;
 }
 
 function contentTypeIsJson(
@@ -100,6 +107,8 @@ function pathnameOf(url: string | undefined): string {
 async function runPipeline(
   deps: HandlerDeps,
   req: IncomingDelivery,
+  /** Set once the signature checks out; read by the dead-letter gate. */
+  auth: { verified: boolean },
 ): Promise<HandledDelivery> {
   const { config, logger } = deps;
 
@@ -234,6 +243,8 @@ async function runPipeline(
       delivery,
     };
   }
+  auth.verified = true;
+
   if (verification.matchedSlot === 1) {
     logger.info(
       `route '${routeId}': signature matched rotation slot; finish the secret roll`,
@@ -382,7 +393,23 @@ async function runPipeline(
     // 13. Dispatch, bracketed by ledger writes. `begin` is awaited: it is the
     //     boundary before which we must not acknowledge anything.
     await deps.ledger.begin(eventId, delivery.attemptCount ?? 1, { routeId });
-    const outcome = await dispatcher.dispatch({ routeId, delivery, payload });
+
+    let outcome: DispatchOutcome;
+    try {
+      outcome = await dispatcher.dispatch({ routeId, delivery, payload });
+    } catch (err) {
+      // A dispatcher that throws would otherwise skip the settle below and
+      // leave a `running` row owned by this live instance: invisible to
+      // `listOrphans`, counted as in-flight forever, and never dead-lettered
+      // even on the final attempt.
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(`route '${routeId}': dispatch threw: ${message}`);
+      await deps.ledger.settle(eventId, "failed");
+      outcome = {
+        settle: "failed",
+        plan: retryable(503, "dispatch_error", `dispatch failed: ${message}`),
+      };
+    }
 
     // `deferred` means the dispatcher took ownership and settles the row itself
     // when its background run finishes. Settling here would tell the next boot
@@ -409,8 +436,9 @@ export async function handleDelivery(
   deps: HandlerDeps,
   req: IncomingDelivery,
 ): Promise<HandledDelivery> {
-  const handled = await runPipeline(deps, req);
-  await recordDeadLetter(deps, handled);
+  const auth = { verified: false };
+  const handled = await runPipeline(deps, req, auth);
+  await recordDeadLetter(deps, { ...handled, verified: auth.verified });
   return handled;
 }
 
@@ -431,6 +459,13 @@ async function recordDeadLetter(
   if (log === undefined) return;
 
   const { plan, delivery, routeId } = handled;
+
+  // Nothing before signature verification is dead-lettered. The ingress is
+  // publicly reachable, the log is bounded, and it evicts oldest-first — so
+  // recording unauthenticated junk lets a scanner push out the post-2xx agent
+  // failures, which for a CLI destination are the only record that exists.
+  if (handled.verified !== true) return;
+
   const cancelled = plan.retry.kind === "cancel";
   // Any non-2xx on the final automatic attempt loses the event, not just the
   // codes we nominate as retryable — a 401 on the last attempt is just as gone

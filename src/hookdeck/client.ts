@@ -125,12 +125,6 @@ export interface HookdeckClient {
   pauseConnection(id: string): Promise<ApiResult<HookdeckConnection>>;
   unpauseConnection(id: string): Promise<ApiResult<HookdeckConnection>>;
 
-  /**
-   * Time-boundable catch-up. `bulk/ignored-events/retry` accepts only
-   * `{cause, webhook_id, transformation_id}` with no date filter, and there is
-   * no project-wide `GET /ignored-events`, so replay is the only path that can
-   * be scoped to an outage window.
-   */
   listEvents(params?: {
     limit?: number;
     status?: string;
@@ -189,6 +183,11 @@ export interface HookdeckClient {
   /** A real count. Counting a capped list reports the cap, not the truth. */
   countIssues(params?: { status?: string }): Promise<ApiResult<number>>;
 
+  /**
+   * Time-boundable catch-up, and the only path that can be. The ignored-events
+   * endpoint takes `{cause, webhook_id, transformation_id}` with no date
+   * filter, and there is no project-wide listing of ignored events.
+   */
   bulkReplayRequests(params: {
     query: Record<string, unknown>;
     target: { webhook_ids?: string[]; source_id?: string };

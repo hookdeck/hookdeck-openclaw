@@ -60,9 +60,15 @@ describe("renderRetryAfterHeader", () => {
 });
 
 describe("cancelRetries", () => {
-  it("always dead-letters — if Hookdeck stops trying, the payload must survive locally", () => {
+  it("cancels for every listed reason, and only for those", () => {
+    // Dead-lettering is decided by the handler from the plan's retry
+    // directive, not carried on the plan: a second copy of the decision can
+    // disagree with the one that runs.
     for (const reason of CANCEL_REASONS) {
-      expect(cancelRetries(reason, 400).deadLetter).toBe(true);
+      expect(cancelRetries(reason, 400).retry).toEqual({
+        kind: "cancel",
+        reason,
+      });
     }
   });
 

@@ -1,4 +1,9 @@
-import { requireClient, isError, type ToolDeps } from "./deps.js";
+import {
+  requireClient,
+  isError,
+  requireWritableState,
+  type ToolDeps,
+} from "./deps.js";
 
 /**
  * `hookdeck_pause` — holds events durably at HOLD for a planned or diagnosed
@@ -34,6 +39,14 @@ export async function pauseHandler(
 ) {
   const client = requireClient(deps);
   if (isError(client)) return { ok: false, note: client.error };
+
+  // Checked before the API call, not after: pausing at Hookdeck and failing to
+  // record it is worse than not pausing at all.
+  const unwritable = requireWritableState(
+    deps,
+    params.paused ? "Pausing a connection" : "Resuming a connection",
+  );
+  if (unwritable !== undefined) return { ok: false, note: unwritable.error };
 
   const cursor = deps.cursors.get(params.routeId);
   if (cursor?.connectionId === undefined) {

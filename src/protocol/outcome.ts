@@ -57,18 +57,16 @@ export interface ResponsePlan {
   code: string;
   message?: string;
   retry: RetryDirective;
-  /** Whether to append a local dead-letter record before responding. */
-  deadLetter: boolean;
 }
 
 const NO_RETRY: RetryDirective = { kind: "none" };
 
 export function ok(code: string, message?: string): ResponsePlan {
-  return { status: 200, code, message, retry: NO_RETRY, deadLetter: false };
+  return { status: 200, code, message, retry: NO_RETRY };
 }
 
 export function accepted(code: string, message?: string): ResponsePlan {
-  return { status: 202, code, message, retry: NO_RETRY, deadLetter: false };
+  return { status: 202, code, message, retry: NO_RETRY };
 }
 
 /**
@@ -122,7 +120,6 @@ export function deferFor(
     code,
     retry: { kind: "after", seconds },
     message,
-    deadLetter: false,
   };
 }
 
@@ -136,7 +133,7 @@ export function retryable(
   code: string,
   message?: string,
 ): ResponsePlan {
-  return { status, code, retry: NO_RETRY, message, deadLetter: false };
+  return { status, code, retry: NO_RETRY, message };
 }
 
 /**
@@ -158,7 +155,6 @@ export function cancelRetries(
     code: reason,
     retry: { kind: "cancel", reason },
     message,
-    deadLetter: true,
   };
 }
 

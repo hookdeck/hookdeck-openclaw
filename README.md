@@ -74,7 +74,7 @@ npx hookdeck-cli@latest listen 18789 stripe --path /hookdeck/stripe
 
 Receiving needs **only the signing secret** — verification, deduplication and dispatch make no Hookdeck API calls at all. The Hookdeck CLI has its own separate credential (`hookdeck login`, or guest mode with no account at all).
 
-An `apiKey` is optional and used for exactly one thing today: re-queuing work interrupted by a crash, via `POST /events/{id}/retry`. Without one the plugin runs ingress-only — interrupted work is still detected, settled and dead-lettered, just not re-run, and the startup log says so.
+An `apiKey` is optional. Without one the plugin runs ingress-only: verification, deduplication and dispatch all work, and interrupted work is still detected, settled and dead-lettered — just not re-run. Provisioning, pause/resume, replay, issue management and crash recovery all need it, and the startup log says which are unavailable.
 
 You do not need to configure destination auth either. CLI destinations default to `auth_type: HOOKDECK_SIGNATURE` — applied server-side, so deliveries forwarded by `hookdeck listen` carry `x-hookdeck-signature` and the full `x-hookdeck-*` header set, with the body passed through byte-for-byte. Verification therefore runs identically in local dev and production, which is the point.
 
@@ -88,7 +88,7 @@ You do not need to configure destination auth either. CLI destinations default t
 |---|---|---|
 | `headerPrefix` | `x-hookdeck` | Hookdeck's header prefix is white-labelable per project. Set it if yours differs. |
 | `signingSecret` | — | Inline string or a secretRef `{source, provider, id}`. Routes may override. Re-resolved on every request, so rotation needs no restart. |
-| `apiKey` | — | Optional. Only used to re-queue interrupted work. Without it the plugin runs ingress-only. |
+| `apiKey` | — | Optional. Needed for provisioning, pause/resume, replay, issue management and re-queuing interrupted work. Without it the plugin runs ingress-only. |
 | `storage.enabled` | `true` | Persist the ledger and dead-letter log. Off means memory-only — see [Durability](#durability-and-recovery). |
 | `storage.deadLetterMaxEntries` | `500` | Dead-letter entries kept before the oldest are dropped. |
 | `recovery.enabled` | `true` | Re-queue work interrupted by a crash on the next start. Needs `apiKey`. |
@@ -261,7 +261,7 @@ Without `apiKey`, orphans are still detected, settled and dead-lettered — they
 
 ## Agent tools
 
-Seven tools, matching the shared contract's five operator verbs plus two read tools an agent host benefits from more than a CLI does.
+Eight tools, matching the shared contract's five operator verbs plus two read tools an agent host benefits from more than a CLI does.
 
 | Tool | Answers |
 |---|---|
@@ -274,7 +274,7 @@ Seven tools, matching the shared contract's five operator verbs plus two read to
 | `hookdeck_replay` | Retry specific events, or a scoped bulk replay. Dry run unless `confirm: true`. Caps at 100 ids per call and says what it dropped |
 | `hookdeck_issues` | The dead-letter queue's lifecycle: list, acknowledge, resolve, ignore, dismiss. Replays nothing, and says so |
 
-`tools.allowMutations: false` reduces this to the four read tools, for an agent that can diagnose but not act.
+`tools.allowMutations: false` reduces this to the five read tools — `hookdeck_issues` stays, able to list and inspect but not acknowledge, resolve or dismiss — for an agent that can diagnose but not act.
 
 Four safety rails are deliberate. **`hookdeck_setup` defaults to a dry run**, so an agent has to mean it. **`hookdeck_replay` refuses a filtered replay without `confirm: true`**, because an unscoped retry-everything costs real money. **`hookdeck_pause` always schedules an auto-resume**, clamped to an hour, because an agent that pauses and then loses the thread must not stop the pipeline indefinitely. And **every `hookdeck_issues` mutation states that it replayed nothing** — "resolved" reads like "fixed", and an agent that resolves without replaying has tidied the dashboard and left the work undone.
 
@@ -351,7 +351,7 @@ npm test
 npm run typecheck
 ```
 
-491 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+526 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, the store suites inject write failures at an exact call to prove the degradation rule, and `test/store-io.test.ts` runs against a real filesystem because that is the only place durability actually lives.
 
 ## Shared reliability contract
 

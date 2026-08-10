@@ -127,15 +127,8 @@ export function registerHookdeckTools(
         "no local record by design.",
       parameters: Type.Object({
         routeId: Type.Optional(Type.String()),
-        outcome: Type.Optional(
-          Type.Union([
-            Type.Literal("failed"),
-            Type.Literal("succeeded"),
-            Type.Literal("all"),
-          ]),
-        ),
         limit: Type.Optional(
-          Type.Number({ description: "Default 20, max 100." }),
+          Type.Number({ description: "Default 20, clamped to 1–100." }),
         ),
       }),
       execute: wrap(recentDeliveriesHandler),

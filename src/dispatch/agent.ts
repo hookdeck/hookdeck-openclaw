@@ -128,14 +128,18 @@ export function createAgentDispatcher(
       const reason = result.error ?? result.status;
 
       if (deps.client !== undefined && attempted <= options.maxAgentRetries) {
+        // Settled BEFORE the retry is requested. Hookdeck can redeliver almost
+        // immediately, and the redelivery calls `begin` to open the next run's
+        // row — a settle afterwards would stamp that live row `failed`.
+        await deps.ledger.settle(eventId, "failed", {
+          agentRetries: attempted,
+        });
+
         const retried = await deps.client.retryEvent(eventId);
         if (retried.ok) {
           deps.logger.warn(
             `agent run failed for ${eventId} (${reason}); asked Hookdeck to redeliver (${attempted}/${options.maxAgentRetries})`,
           );
-          await deps.ledger.settle(eventId, "failed", {
-            agentRetries: attempted,
-          });
           return;
         }
         deps.logger.warn(`could not re-queue ${eventId}: ${retried.message}`);

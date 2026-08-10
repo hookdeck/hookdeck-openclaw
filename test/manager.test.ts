@@ -436,3 +436,56 @@ describe("review regressions", () => {
     expect("lastDisconnectAt" in record).toBe(false);
   });
 });
+
+describe("the catch-up window marks the START of an outage", () => {
+  it("keeps the earliest disconnect across a backoff loop", async () => {
+    // The listener exits on every failed respawn. Overwriting the stamp each
+    // time slides the window forward, so events from the original outage fall
+    // outside every window that is ever queried.
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    let clock = 1_000;
+    const exits: (() => void)[] = [];
+
+    const mgr = createTransportManager({
+      config: config({ transport: { mode: "cli" } }),
+      cursors,
+      logger: silent,
+      client: fakeClient(),
+      spawn: () => ({
+        kill: () => {},
+        onLine: () => {},
+        onExit: (cb: (code: number | null, signal: string | null) => void) => {
+          exits.push(() => cb(1, null));
+        },
+      }),
+      resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+      readVersion: async () => "hookdeck version 2.4.0",
+      now: () => clock,
+    });
+
+    await mgr.start();
+    exits[0]?.();
+    await Promise.resolve();
+    expect(cursors.get("stripe")?.lastDisconnectAt).toBe(1_000);
+
+    clock = 500_000;
+    exits[0]?.();
+    await Promise.resolve();
+    expect(cursors.get("stripe")?.lastDisconnectAt).toBe(1_000);
+
+    await mgr.stop();
+  });
+
+  it("stamps a fresh outage once the previous one is recovered", async () => {
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    await cursors.patch("stripe", { lastDisconnectAt: 1_000 });
+    await cursors.clear("stripe", "lastDisconnectAt");
+    expect(cursors.get("stripe")?.lastDisconnectAt).toBeUndefined();
+  });
+});
