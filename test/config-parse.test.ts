@@ -266,13 +266,18 @@ describe("the manifest schema and the config parser must agree", () => {
   it("declares every key the parser produces", () => {
     const parsed = parseHookdeckConfig({
       signingSecret: "whsec",
-      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+      routes: {
+        a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } },
+      },
     });
     if (!parsed.ok) throw new Error("fixture should parse");
 
     const declared = new Set(Object.keys(manifest.configSchema.properties));
     const missing = Object.keys(parsed.config).filter((k) => !declared.has(k));
-    expect(missing, "config keys absent from openclaw.plugin.json configSchema").toEqual([]);
+    expect(
+      missing,
+      "config keys absent from openclaw.plugin.json configSchema",
+    ).toEqual([]);
   });
 
   it("declares nothing the parser would reject", () => {
@@ -281,11 +286,17 @@ describe("the manifest schema and the config parser must agree", () => {
     const declared = Object.keys(manifest.configSchema.properties);
     const parsed = parseHookdeckConfig({
       signingSecret: "whsec",
-      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+      routes: {
+        a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } },
+      },
     });
     if (!parsed.ok) throw new Error("fixture should parse");
 
-    const known = new Set([...Object.keys(parsed.config), "signingSecret", "apiKey"]);
+    const known = new Set([
+      ...Object.keys(parsed.config),
+      "signingSecret",
+      "apiKey",
+    ]);
     expect(declared.filter((k) => !known.has(k))).toEqual([]);
   });
 
@@ -293,10 +304,14 @@ describe("the manifest schema and the config parser must agree", () => {
     const parsed = parseHookdeckConfig({
       signingSecret: "whsec",
       tools: { allowMutations: false },
-      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+      routes: {
+        a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } },
+      },
     });
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.config.tools.allowMutations).toBe(false);
-    expect(manifest.configSchema.properties.tools?.properties).toHaveProperty("allowMutations");
+    expect(manifest.configSchema.properties.tools?.properties).toHaveProperty(
+      "allowMutations",
+    );
   });
 });

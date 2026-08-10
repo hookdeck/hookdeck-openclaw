@@ -233,7 +233,8 @@ export async function recentDeliveriesHandler(
       limit: limit,
     });
     if (result.ok) {
-      issues = result.data.map(summariseIssue);
+      const names = await resolveConnectionNames(deps.client, result.data);
+      issues = result.data.map((i) => summariseIssue(i, names));
     } else {
       issuesNote = `Could not read Hookdeck Issues: ${result.message}`;
     }
@@ -665,6 +666,8 @@ export async function issuesHandler(
     if (!result.ok)
       return { ok: false, note: `Issue lookup failed: ${result.message}` };
 
+    const names = await resolveConnectionNames(client, result.data);
+
     // Counted separately: a list is capped, so its length answers "how many did
     // you show me", not "how many are there".
     //
@@ -689,7 +692,7 @@ export async function issuesHandler(
           }
         : {}),
       shown: result.data.length,
-      issues: result.data.map(summariseIssue),
+      issues: result.data.map((i) => summariseIssue(i, names)),
       ...(result.data.length === 0
         ? {
             summary:
@@ -713,9 +716,10 @@ export async function issuesHandler(
     const result = await client.getIssue(issueId);
     if (!result.ok)
       return { ok: false, note: `Issue lookup failed: ${result.message}` };
+    const names = await resolveConnectionNames(client, [result.data]);
     return {
       ok: true,
-      issue: summariseIssue(result.data),
+      issue: summariseIssue(result.data, names),
       reference: result.data.reference ?? null,
     };
   }
@@ -763,17 +767,74 @@ const ISSUE_ACTION_STATUS = {
   ignore: "IGNORED",
 } as const satisfies Record<string, IssueStatus>;
 
-function summariseIssue(issue: HookdeckIssue) {
+function summariseIssue(
+  issue: HookdeckIssue,
+  connectionNames?: ReadonlyMap<string, string>,
+) {
+  const keys = issue.aggregation_keys ?? null;
+  const ids = webhookIdsOf(issue);
+
   return {
     id: issue.id,
     type: issue.type ?? issue.issue_type ?? null,
     status: issue.status ?? null,
     firstSeen: issue.first_seen_at ?? null,
     lastSeen: issue.last_seen_at ?? null,
-    // Delivery issues aggregate on webhook_id / response_status / error_code —
-    // the three things that answer "which connection, failing how".
-    keys: issue.aggregation_keys ?? null,
+    /**
+     * Named, not just identified.
+     *
+     * Issues carry `webhook_id` and nothing else, and a person asks about
+     * "the hermes-livetest connection". Handing a model raw ids it cannot
+     * resolve is not a neutral omission: asked to act on a named connection,
+     * a real agent picked a DIFFERENT issue and acknowledged it, because
+     * "oldest" was the only key it could actually evaluate.
+     */
+    connections:
+      ids.length === 0
+        ? null
+        : ids.map((id) => ({ id, name: connectionNames?.get(id) ?? null })),
+    // Delivery issues also aggregate on response_status and error_code — with
+    // the connection, that is "which one, failing how".
+    keys,
   };
+}
+
+function webhookIdsOf(issue: HookdeckIssue): string[] {
+  const raw = (issue.aggregation_keys ?? {})["webhook_id"];
+  const list = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+  return list.filter((v): v is string => typeof v === "string");
+}
+
+/**
+ * Looks up the connection names an issue list refers to.
+ *
+ * One request per distinct id, capped: a page of issues spanning many
+ * connections should not turn one tool call into fifty. Failures degrade to a
+ * null name rather than failing the listing — an issue with an unresolved name
+ * is still worth showing.
+ */
+const MAX_NAME_LOOKUPS = 25;
+
+async function resolveConnectionNames(
+  client: HookdeckClient,
+  issues: readonly HookdeckIssue[],
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const ids = [...new Set(issues.flatMap(webhookIdsOf))].slice(
+    0,
+    MAX_NAME_LOOKUPS,
+  );
+
+  await Promise.all(
+    ids.map(async (id) => {
+      const result = await client.getConnection(id).catch(() => undefined);
+      if (result?.ok === true && result.data.name !== undefined) {
+        names.set(id, result.data.name);
+      }
+    }),
+  );
+
+  return names;
 }
 
 // ---------------------------------------------------------------------------

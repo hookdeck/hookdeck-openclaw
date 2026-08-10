@@ -44,6 +44,9 @@ ANTHROPIC_KEY="$(read_env AGENT_TEST_ANTHROPIC_API_KEY)"
 OPENAI_KEY="$(read_env AGENT_TEST_OPENAI_API_KEY)"
 MODEL="$(read_env AGENT_TEST_MODEL)"
 HOOKDECK_KEY="$(read_env HOOKDECK_TEST_API_KEY)"
+# Off unless explicitly asked for. With a live key this run can then change
+# real Hookdeck state, so it must be a deliberate act, never a default.
+ALLOW_MUTATIONS="${AGENT_TEST_ALLOW_MUTATIONS:-}"
 
 if [ -z "$ANTHROPIC_KEY" ] && [ -z "$OPENAI_KEY" ]; then
   echo "No model key found. Add AGENT_TEST_ANTHROPIC_API_KEY or AGENT_TEST_OPENAI_API_KEY to .env.local"
@@ -57,8 +60,12 @@ else
   MODEL="${MODEL:-openai/gpt-5.2-mini}"
 fi
 
-if [ -n "$HOOKDECK_KEY" ]; then
-  # Read-only: mutations off, no provisioning, no listener.
+if [ -n "$HOOKDECK_KEY" ] && [ -n "$ALLOW_MUTATIONS" ]; then
+  # Provisioning and transport still default to off, so the only thing this can
+  # change is an issue's status — never a connection, source or destination.
+  HOOKDECK_CONFIG=$(printf '"apiKey": "%s",' "$HOOKDECK_KEY")
+  KEY_NOTE="with a live Hookdeck API key AND MUTATIONS ENABLED — this run can change real issue state"
+elif [ -n "$HOOKDECK_KEY" ]; then
   HOOKDECK_CONFIG=$(printf '"apiKey": "%s",\n          "tools": { "allowMutations": false },' "$HOOKDECK_KEY")
   KEY_NOTE="with a live Hookdeck API key (read-only: mutations disabled)"
 else
@@ -101,7 +108,7 @@ sleep 14
 # 8 normally; 5 with a Hookdeck key, because that run sets
 # tools.allowMutations: false and setup/pause/replay are then not registered.
 # hookdeck_issues stays in both — its list and get actions are pure reads.
-if [ -n "$HOOKDECK_KEY" ]; then EXPECTED_TOOLS=5; else EXPECTED_TOOLS=8; fi
+if [ -n "$HOOKDECK_KEY" ] && [ -z "$ALLOW_MUTATIONS" ]; then EXPECTED_TOOLS=5; else EXPECTED_TOOLS=8; fi
 DECLARED=$(grep -o "declared [0-9]* tool(s)" "$LOG" | head -1 | grep -o "[0-9]*")
 if [ "${DECLARED:-0}" != "$EXPECTED_TOOLS" ]; then
   echo "Expected $EXPECTED_TOOLS tools, host declared '${DECLARED:-none}'."
@@ -145,7 +152,14 @@ if [ -n "$HOOKDECK_KEY" ]; then
   # These only mean something with a key: without one the tools say they need
   # an operator, which is the other half of what this script proves.
   ask "Using the hookdeck tools, tell me about any open Hookdeck Issues. What kind are they, and what would I have to do to clear one?"
-  ask "Acknowledge the oldest open Hookdeck issue for me."
+  if [ -n "$ALLOW_MUTATIONS" ]; then
+    # Scoped to one connection on purpose. "Acknowledge the oldest issue" would
+    # let the model pick anything in the project.
+    ask "Acknowledge the oldest open Hookdeck issue for the hermes-livetest connection, then confirm what changed and what did NOT change."
+  else
+    # The refusal is the point: the correct answer names tools.allowMutations.
+    ask "Acknowledge the oldest open Hookdeck issue for me."
+  fi
 fi
 
 echo
@@ -161,9 +175,17 @@ if [ -n "$HOOKDECK_KEY" ]; then
   echo "failing and how. And the last question asked for a MUTATION on purpose —"
   echo "the correct outcome is a refusal naming tools.allowMutations, not an"
   echo "acknowledged issue."
-  echo
-  echo "NOT proven here: the issue lifecycle actually writing. Nothing in this run"
-  echo "can mutate the project, by construction."
+  if [ -n "$ALLOW_MUTATIONS" ]; then
+    echo
+    echo "MUTATIONS WERE ENABLED for this run, so the acknowledge really wrote."
+    echo "Check the issue's status in the dashboard, and note WHICH issue moved:"
+    echo "before connection names were resolved, an agent asked for a named"
+    echo "connection acknowledged a different one, because the id was all it had."
+  else
+    echo
+    echo "NOT proven here: the issue lifecycle actually writing. Nothing in this run"
+    echo "can mutate the project, by construction."
+  fi
 else
   echo
   echo "NOT proven here: tools returning live Hookdeck data. Set HOOKDECK_TEST_API_KEY"

@@ -35,6 +35,7 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
       ok: true as const,
       data: {
         id: "web_1",
+        name: "hermes-livetest",
         rules: [
           { type: "retry", response_status_codes: [...RETRYABLE_STATUS_CODES] },
         ],
@@ -74,7 +75,14 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
     })),
     listIssues: vi.fn(async () => ({
       ok: true as const,
-      data: [{ id: "iss_1", type: "delivery", status: "OPENED" }],
+      data: [
+        {
+          id: "iss_1",
+          type: "delivery",
+          status: "OPENED",
+          aggregation_keys: { webhook_id: ["web_1"], response_status: [503] },
+        },
+      ],
     })),
     getIssue: vi.fn(async (id: string) => ({
       ok: true as const,
@@ -212,7 +220,8 @@ describe("hookdeck_recent_deliveries", () => {
         status: "OPENED",
         firstSeen: null,
         lastSeen: null,
-        keys: null,
+        connections: [{ id: "web_1", name: "hermes-livetest" }],
+        keys: { webhook_id: ["web_1"], response_status: [503] },
       },
     ]);
     expect(d.client!.listIssues).toHaveBeenCalledWith(
@@ -1133,5 +1142,67 @@ describe("issue counts stay honest under a type filter", () => {
     const d = await deps();
     const result = await issuesHandler(d, {});
     expect(result.total).toBe(1);
+  });
+});
+
+describe("issues name the connection, not just its id", () => {
+  it("resolves webhook_id to the name a person would use", async () => {
+    // Issues carry only `webhook_id`. Asked to act on "the hermes-livetest
+    // connection", a real agent acknowledged a DIFFERENT issue, because
+    // "oldest" was the only key it could actually evaluate. Handing a model an
+    // id it cannot resolve is not a neutral omission.
+    const d = await deps();
+    const result = await issuesHandler(d, {});
+    expect(result.issues?.[0]?.connections).toEqual([
+      { id: "web_1", name: "hermes-livetest" },
+    ]);
+  });
+
+  it("looks each connection up once, however many issues share it", async () => {
+    const d = await deps({
+      client: fakeClient({
+        listIssues: vi.fn(async () => ({
+          ok: true as const,
+          data: [
+            { id: "iss_1", aggregation_keys: { webhook_id: ["web_1"] } },
+            { id: "iss_2", aggregation_keys: { webhook_id: ["web_1"] } },
+            { id: "iss_3", aggregation_keys: { webhook_id: ["web_1"] } },
+          ],
+        })),
+      }),
+    });
+    await issuesHandler(d, {});
+    expect(d.client!.getConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it("still lists when a name lookup fails", async () => {
+    const d = await deps({
+      client: fakeClient({
+        getConnection: vi.fn(async () => ({
+          ok: false as const,
+          code: "not_found",
+          message: "gone",
+        })),
+      }),
+    });
+    const result = await issuesHandler(d, {});
+    expect(result.ok).toBe(true);
+    expect(result.issues?.[0]?.connections).toEqual([
+      { id: "web_1", name: null },
+    ]);
+  });
+
+  it("reports no connections rather than an empty name when the issue has none", async () => {
+    const d = await deps({
+      client: fakeClient({
+        listIssues: vi.fn(async () => ({
+          ok: true as const,
+          data: [{ id: "iss_1", type: "backpressure" }],
+        })),
+      }),
+    });
+    const result = await issuesHandler(d, {});
+    expect(result.issues?.[0]?.connections).toBeNull();
+    expect(d.client!.getConnection).not.toHaveBeenCalled();
   });
 });

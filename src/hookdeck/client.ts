@@ -30,6 +30,8 @@ export type ApiResult<T> =
 
 export interface HookdeckConnection {
   id: string;
+  /** How a person refers to it. Issues carry only the id. */
+  name?: string;
   paused_at?: string | null;
   rules?: { type: string; response_status_codes?: string[] }[];
 }
