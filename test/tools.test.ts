@@ -108,7 +108,43 @@ describe("hookdeck_status", () => {
 });
 
 describe("hookdeck_recent_deliveries", () => {
-  it("joins the dead-letter log with the ledger", async () => {
+  it("leads with Hookdeck Issues, which are the actual dead-letter queue", async () => {
+    const d = await deps();
+    const result = await recentDeliveriesHandler(d, {});
+    expect(result.openIssues).toEqual([
+      { id: "iss_1", type: null, firstSeen: null, lastSeen: null },
+    ]);
+    expect(d.client!.listIssues).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "OPENED" }),
+    );
+  });
+
+  it("separates failures Hookdeck cannot see from ones it can", async () => {
+    // Post-acknowledgement failures are invisible to Hookdeck — it recorded a
+    // successful delivery — so no Issue will ever cover them.
+    const d = await deps();
+    await d.deadLetter.record({
+      eventId: "evt_pre", routeId: "stripe", code: "malformed_json", reason: "bad",
+      retriesCancelled: true, lastAttempt: true, hookdeckVisible: true,
+    });
+    await d.deadLetter.record({
+      eventId: "evt_post", routeId: "stripe", code: "agent_run_failed", reason: "died",
+      retriesCancelled: false, lastAttempt: true, hookdeckVisible: false,
+    });
+
+    const result = await recentDeliveriesHandler(d, {});
+    expect(result.unreportedFailures.map((r) => r.eventId)).toEqual(["evt_post"]);
+    expect(result.locallyRecorded.map((r) => r.eventId)).toEqual(["evt_pre"]);
+  });
+
+  it("says plainly when the real DLQ is unreachable", async () => {
+    const d = await deps({ client: undefined });
+    const result = await recentDeliveriesHandler(d, {});
+    expect(result.openIssues).toBeNull();
+    expect(String(result.note)).toMatch(/dead-letter queue/i);
+  });
+
+  it("joins the local record with the ledger", async () => {
     const d = await deps();
     await d.ledger.begin("evt_1", 2, { routeId: "stripe" });
     await d.ledger.settle("evt_1", "failed");
@@ -119,10 +155,13 @@ describe("hookdeck_recent_deliveries", () => {
       reason: "invalid JSON",
       retriesCancelled: true,
       lastAttempt: true,
+      // A pre-acknowledgement rejection: we answered non-2xx, so Hookdeck
+      // recorded it too and an Issue covers it.
+      hookdeckVisible: true,
     });
 
     const result = await recentDeliveriesHandler(d, {});
-    expect(result.deadLetters[0]).toMatchObject({
+    expect(result.locallyRecorded[0]).toMatchObject({
       eventId: "evt_1",
       ourCode: "malformed_json",
       ledgerStatus: "failed",
@@ -134,9 +173,12 @@ describe("hookdeck_recent_deliveries", () => {
   it("explains an empty result rather than implying nothing happened", async () => {
     // Successful deliveries leave no local record by design, so "empty" is
     // ambiguous without saying so.
-    const result = await recentDeliveriesHandler(await deps(), {});
-    expect(result.deadLetters).toHaveLength(0);
-    expect(result.note).toMatch(/leave no local record/i);
+    const d = await deps({
+      client: fakeClient({ listIssues: vi.fn(async () => ({ ok: true as const, data: [] })) }),
+    });
+    const result = await recentDeliveriesHandler(d, {});
+    expect(result.unreportedFailures).toHaveLength(0);
+    expect(String(result.summary)).toMatch(/nothing has been given up on/i);
   });
 
   it("filters by route", async () => {
@@ -145,7 +187,7 @@ describe("hookdeck_recent_deliveries", () => {
       eventId: "e1", routeId: "other", code: "x", reason: "y",
       retriesCancelled: false, lastAttempt: false,
     });
-    expect((await recentDeliveriesHandler(d, { routeId: "stripe" })).deadLetters).toHaveLength(0);
+    expect((await recentDeliveriesHandler(d, { routeId: "stripe" })).locallyRecorded).toHaveLength(0);
   });
 
   it("filters before applying the limit, not after", async () => {
@@ -165,7 +207,7 @@ describe("hookdeck_recent_deliveries", () => {
       });
     }
     const result = await recentDeliveriesHandler(d, { routeId: "stripe", limit: 20 });
-    expect(result.deadLetters).toHaveLength(3);
+    expect(result.locallyRecorded.length + result.unreportedFailures.length).toBe(3);
   });
 });
 
@@ -462,5 +504,32 @@ describe("a disk-backed view does not look like a degraded one", () => {
     expect(status.inFlight).toBeNull();
     expect(status.transport.listeners).toBeNull();
     expect(String(status.note)).toMatch(/state files/i);
+  });
+});
+
+describe("we do not reimplement Hookdeck's dead-letter queue", () => {
+  it("treats an unmarked local record as invisible to Hookdeck, not visible", async () => {
+    // The safe default: never assume an Issue covers something. Claiming
+    // Hookdeck has a record it does not is worse than showing it twice.
+    const d = await deps();
+    await d.deadLetter.record({
+      eventId: "evt_x", routeId: "stripe", code: "whatever", reason: "y",
+      retriesCancelled: false, lastAttempt: false,
+    });
+    const result = await recentDeliveriesHandler(d, {});
+    expect(result.unreportedFailures.map((r) => r.eventId)).toContain("evt_x");
+  });
+
+  it("records an exhausted agent run as invisible to Hookdeck", async () => {
+    // Hookdeck saw a 202 before the run failed, so no Issue will ever open.
+    const d = await deps();
+    await d.deadLetter.record({
+      eventId: "evt_agent", routeId: "stripe", code: "agent_run_failed",
+      reason: "exhausted", retriesCancelled: false, lastAttempt: true,
+      hookdeckVisible: false,
+    });
+    const result = await recentDeliveriesHandler(d, {});
+    expect(result.unreportedFailures[0]).toMatchObject({ ourCode: "agent_run_failed" });
+    expect(result.locallyRecorded).toHaveLength(0);
   });
 });

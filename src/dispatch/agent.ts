@@ -127,6 +127,9 @@ export function createAgentDispatcher(
         eventId,
         routeId,
         code: "agent_run_failed",
+        // Hookdeck recorded a successful delivery before this happened, so no
+        // Issue will ever open. Nothing else knows about it.
+        hookdeckVisible: false,
         reason:
           deps.client === undefined
             ? `agent run failed (${reason}); no API key configured, so it was not re-queued`

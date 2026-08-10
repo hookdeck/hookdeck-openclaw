@@ -266,7 +266,7 @@ Seven tools, matching the shared contract's five operator verbs plus two read to
 | Tool | Answers |
 |---|---|
 | `hookdeck_status` | "Are webhooks working?" — routes, capacity, ledger persistence, dead-letter count, open issues, transport state, config warnings |
-| `hookdeck_recent_deliveries` | "Did anything break overnight?" — dead-letters joined with ledger state |
+| `hookdeck_recent_deliveries` | "Did anything break overnight?" — open Hookdeck Issues, plus failures Hookdeck cannot see |
 | `hookdeck_inspect_event` | "Why did *this* one fail?" — our row and reason beside Hookdeck's status |
 | `hookdeck_doctor` | What's misconfigured, including whether each connection's retry rule still covers every status we emit |
 | `hookdeck_setup` | Provisions connections. Dry run by default |
@@ -292,6 +292,19 @@ Each result carries `source: "live" | "disk"`. On a disk view, in-flight capacit
 >
 > Both shipped broken here first, with a clean typecheck and a passing suite. Tests now assert the manifest matches the code, every tool has a label, the execute arity is right, and the return is an `AgentToolResult`.
 
+### Hookdeck Issues are the dead-letter queue
+
+This plugin does not reimplement one. A delivery Issue with `strategy: "final_attempt"` means exactly "this event is not coming back", and it carries notifications, an acknowledge/resolve lifecycle and a dashboard that a local file never will. `hookdeck_recent_deliveries` therefore leads with open Issues.
+
+The local log holds only the residue Hookdeck is structurally blind to, created by our own choice to acknowledge early:
+
+- an agent run that failed **after** we returned `202`, once its retry budget is spent;
+- work interrupted by a crash between the acknowledgement and completion.
+
+In both cases Hookdeck recorded a *successful* delivery, so no Issue will ever open and nothing else knows they happened. Those come back as `unreportedFailures`.
+
+Pre-acknowledgement rejections — a cancelled retry, a final failed attempt — are mirrored locally only as a convenience where Issues are unreachable, and are returned separately as `locallyRecorded` so a reader knows to prefer the Issue. Two cases make that mirror worth keeping: deployments with no API key, and **CLI destinations, which support no issue triggers at all** — so in local development the local log is the only record there is.
+
 ## Trust boundary
 
 **A valid signature authenticates the sender, not the content.** Webhook payload text is third-party input that ends up in a prompt reaching a model with tools.
@@ -316,7 +329,7 @@ npm test
 npm run typecheck
 ```
 
-426 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+431 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 

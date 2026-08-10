@@ -3,22 +3,42 @@ import { createJsonlStore, type JsonlStore, type PersistenceState } from "./json
 import type { StoreIo } from "./store-io.js";
 
 /**
- * Local record of everything we stop retrying.
+ * Local record of outcomes Hookdeck cannot observe.
  *
- * Two callers, and both matter:
+ * **Hookdeck Issues are the dead-letter queue.** A delivery Issue with
+ * `strategy: "final_attempt"` is exactly "this event is not coming back", and it
+ * carries notifications, an acknowledge/resolve lifecycle and a dashboard that a
+ * local file never will. Reimplementing that would be a worse copy of something
+ * the platform already does well, so this log deliberately does not try.
  *
- *  - Any `Retry-After: -1` cancellation. If we are telling Hookdeck to stop
- *    trying, the payload has to survive somewhere or it is simply gone.
- *  - The last automatic attempt, detected by an absent `x-hookdeck-will-retry-after`.
- *    Hookdeck opens an Issue, which is the operator's alert; this is the local
- *    copy the agent can read without an API call.
+ * What it holds instead is the residue Hookdeck is blind to, created by our own
+ * choice to acknowledge early:
  *
- * Bounded by count as well as TTL: a dead-letter log that grows without limit
- * during an outage is its own incident.
+ *  - an agent run that failed *after* we returned 202, once the retry budget is
+ *    spent;
+ *  - work interrupted by a crash between the acknowledgement and completion.
+ *
+ * In both cases Hookdeck recorded a successful delivery, so no Issue will ever
+ * open. Nothing else knows these happened.
+ *
+ * Pre-acknowledgement rejections — a cancelled retry, a final failed attempt —
+ * are recorded only as a convenience for deployments with no API key, where
+ * Issues are unreachable, and are marked `hookdeckVisible` so a reader knows to
+ * prefer the Issue. CLI destinations are a special case worth knowing about:
+ * they support no issue triggers at all, so in local development this local log
+ * is the only record there is.
+ *
+ * Bounded by count as well as TTL: a log that grows without limit during an
+ * outage is its own incident.
  */
 
 export interface DeadLetterRecord {
   id: string;
+  /**
+   * True when Hookdeck can see this failure too — i.e. we answered non-2xx and
+   * a delivery Issue covers it. Readers should prefer the Issue.
+   */
+  hookdeckVisible?: boolean;
   eventId?: string;
   requestId?: string;
   routeId?: string;

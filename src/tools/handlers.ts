@@ -129,6 +129,11 @@ export async function statusHandler(deps: ToolDeps, params: { routeId?: string }
 
 // ---------------------------------------------------------------------------
 // recent deliveries — the "did anything break overnight?" tool
+//
+// Hookdeck Issues are the dead-letter queue, so they are the primary source
+// here. The local log only adds what Issues structurally cannot contain:
+// failures that happened after we already answered 2xx, which Hookdeck recorded
+// as successful deliveries.
 // ---------------------------------------------------------------------------
 
 export async function recentDeliveriesHandler(
@@ -158,15 +163,56 @@ export async function recentDeliveriesHandler(
       ledgerStatus: row?.status ?? null,
       attempt: row?.attempt ?? entry.attemptCount ?? null,
       at: new Date(entry.createdAt).toISOString(),
+      hookdeckVisible: entry.hookdeckVisible === true,
     };
   });
 
+  // Hookdeck's Issues ARE the dead-letter queue: a delivery issue with
+  // strategy `final_attempt` means exactly "this event is not coming back",
+  // with notifications and an acknowledge/resolve lifecycle attached.
+  let issues: { id: string; type: string | null; firstSeen: string | null; lastSeen: string | null }[] | null =
+    null;
+  let issuesNote: string | undefined;
+  if (deps.client !== undefined) {
+    const result = await deps.client.listIssues({ status: "OPENED", limit: limit });
+    if (result.ok) {
+      issues = result.data.map((i) => ({
+        id: i.id,
+        type: i.issue_type ?? null,
+        firstSeen: i.first_seen_at ?? null,
+        lastSeen: i.last_seen_at ?? null,
+      }));
+    } else {
+      issuesNote = `Could not read Hookdeck Issues: ${result.message}`;
+    }
+  } else {
+    issuesNote =
+      "No API key configured, so Hookdeck Issues — the actual dead-letter queue — could not be read. " +
+      "Only locally-recorded outcomes are shown below.";
+  }
+
+  const postAck = rows.filter((r) => r.hookdeckVisible !== true);
+
   return {
-    deadLetters: rows,
-    note:
-      rows.length === 0
-        ? "Nothing dead-lettered. Successful deliveries leave no local record by design, so an empty result means nothing has been given up on — not that nothing arrived. Use hookdeck_status for throughput, or Hookdeck's event log for the full picture."
-        : undefined,
+    source: deps.source,
+    // The real DLQ.
+    openIssues: issues,
+    /**
+     * Failures Hookdeck cannot see, because we had already answered 2xx when
+     * they happened. No Issue will ever open for these.
+     */
+    unreportedFailures: postAck,
+    /** Local mirror of failures Hookdeck also recorded; prefer the Issue. */
+    locallyRecorded: rows.filter((r) => r.hookdeckVisible === true),
+    ...(issuesNote !== undefined ? { note: issuesNote } : {}),
+    ...(issues !== null && issues.length === 0 && postAck.length === 0
+      ? {
+          summary:
+            "No open Hookdeck Issues and nothing failed after acknowledgement. Successful " +
+            "deliveries leave no local record by design, so this means nothing has been given " +
+            "up on rather than that nothing arrived.",
+        }
+      : {}),
   };
 }
 

@@ -100,9 +100,10 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
       name: "hookdeck_recent_deliveries",
       label: "Hookdeck Recent Deliveries",
       description:
-        "Recent webhook deliveries that failed or were dead-lettered, joining the local ledger with our " +
-        "own record of why. Answers 'did anything break overnight?'. Note that successful deliveries " +
-        "leave no local record by design.",
+        "What has gone wrong recently. Returns open Hookdeck Issues — which ARE the dead-letter " +
+        "queue — plus failures Hookdeck cannot see because they happened after the delivery was " +
+        "already acknowledged. Answers 'did anything break overnight?'. Successful deliveries leave " +
+        "no local record by design.",
       parameters: Type.Object({
         routeId: Type.Optional(Type.String()),
         outcome: Type.Optional(

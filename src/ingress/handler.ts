@@ -368,6 +368,11 @@ async function recordDeadLetter(deps: HandlerDeps, handled: HandledDelivery): Pr
       ...(routeId !== undefined ? { routeId } : {}),
       code: plan.code,
       reason: plan.message ?? plan.code,
+      // We answered non-2xx, so Hookdeck records the failure and a delivery
+      // Issue covers it. This local row is a convenience for deployments
+      // without an API key, and for CLI destinations, which support no issue
+      // triggers at all.
+      hookdeckVisible: true,
       // Reflects what we will actually put on the wire, not merely what the
       // plan asked for: with the kill switch off, no cancellation is sent.
       retriesCancelled: cancelled && deps.config.safety.allowRetryCancel,
