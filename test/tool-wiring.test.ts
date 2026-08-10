@@ -35,7 +35,7 @@ function unwrap(result: { content: unknown[] }): unknown {
 
 function captureTools(options: {
   allowMutations?: boolean;
-  deps?: () => ToolDeps | undefined;
+  deps?: () => Promise<ToolDeps | undefined> | ToolDeps | undefined;
 }): { tools: CapturedTool[]; warnings: string[] } {
   const tools: CapturedTool[] = [];
   const warnings: string[] = [];
@@ -60,6 +60,7 @@ async function liveDeps(): Promise<ToolDeps> {
   const io = createFakeStoreIo();
   return {
     config: parsed.config,
+    source: "live" as const,
     ledger: createMemoryLedger({ ttlHours: 168, instanceId: "test" }),
     deadLetter: await createDeadLetterLog({ ttlHours: 168 }),
     cursors: await createCursorStore({ stateDir: "/state", io }),

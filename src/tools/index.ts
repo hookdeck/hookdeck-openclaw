@@ -49,18 +49,20 @@ export const ALL_TOOL_NAMES = [...READ_TOOL_NAMES, ...MUTATION_TOOL_NAMES] as co
 
 export interface RegisterToolsOptions {
   allowMutations: boolean;
-  /** Absent before the service starts; tools report that rather than throwing. */
-  deps(): ToolDeps | undefined;
+  /**
+   * Resolves the state view for one call: the live service when in-process,
+   * otherwise the same state read from disk.
+   */
+  deps(): Promise<ToolDeps | undefined> | ToolDeps | undefined;
   schedule?(fn: () => void, ms: number): void;
 }
 
 const NOT_STARTED = {
   ok: false,
   note:
-    "The Hookdeck plugin's service is not running, so there is no live state to report. " +
-    "These tools operate on a running Gateway: start one with `openclaw gateway`. " +
-    "In an embedded run (`openclaw agent --local`) the service never starts, so this is the " +
-    "expected answer rather than a transient one.",
+    "No Hookdeck plugin state is readable: the service is not running in this process and its " +
+    "state files could not be opened. If `storage.enabled` is false there is nothing to read " +
+    "outside the running Gateway; otherwise check the state directory is accessible.",
 };
 
 export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterToolsOptions): void {
@@ -71,7 +73,7 @@ export function registerHookdeckTools(api: OpenClawPluginApi, options: RegisterT
   const wrap =
     <P>(handler: (deps: ToolDeps, params: P) => Promise<unknown>) =>
     async (_toolCallId: string, params: P) => {
-      const deps = options.deps();
+      const deps = await options.deps();
       if (deps === undefined) return jsonResult(NOT_STARTED);
       try {
         return jsonResult(await handler(deps, params));

@@ -25,15 +25,25 @@ import type { Ledger } from "../store/ledger.js";
 
 export interface ToolDeps {
   config: HookdeckPluginConfig;
+  /** State, read from the live service when in-process, otherwise from disk. */
   ledger: Ledger;
   deadLetter: DeadLetterLog;
   cursors: CursorStore;
-  inFlight: InFlightRegistry;
   logger: Logger;
   client?: HookdeckClient | undefined;
-  transportStatus(): Record<string, { state: string; restarts: number; recent: string[] }>;
-  retryCancels(): Record<string, number>;
   configWarnings(): { path: string; message: string }[];
+  /**
+   * Whether this view came from the running service or from its state files.
+   *
+   * Reported to the agent rather than hidden: in-flight counts and transport
+   * state exist only in the service's memory, so a disk view genuinely cannot
+   * know them, and saying "0 in flight" would be a lie rather than a gap.
+   */
+  source: "live" | "disk";
+  /** Live-only. Absent on a disk view. */
+  inFlight?: InFlightRegistry | undefined;
+  transportStatus?: (() => Record<string, { state: string; restarts: number; recent: string[] }>) | undefined;
+  retryCancels?: (() => Record<string, number>) | undefined;
   now?(): number;
 }
 
@@ -50,6 +60,17 @@ function isError(value: unknown): value is { error: string } {
 // ---------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------
+
+/**
+ * `readonly` describes OUR handle on the file, not the system's health. Leaking
+ * it into status invited a real misreading: an agent reported that events were
+ * "stuck with no automatic retry path" because persistence was read-only, when
+ * the Gateway was persisting normally and the reader simply had a read-only
+ * view. `source` already carries that nuance.
+ */
+function reportedPersistence(state: string): string {
+  return state === "readonly" ? "active" : state;
+}
 
 export async function statusHandler(deps: ToolDeps, params: { routeId?: string }) {
   const ledgerStats = deps.ledger.stats();
@@ -78,18 +99,29 @@ export async function statusHandler(deps: ToolDeps, params: { routeId?: string }
   }
 
   return {
+    source: deps.source,
+    ...(deps.source === "disk"
+      ? {
+          note:
+            "Read from the plugin's state files rather than a running service, so in-flight " +
+            "capacity and transport state are unavailable here. Everything else is current.",
+        }
+      : {}),
     routes,
-    inFlight: { current: deps.inFlight.size, max: deps.inFlight.capacity },
+    inFlight:
+      deps.inFlight === undefined
+        ? null
+        : { current: deps.inFlight.size, max: deps.inFlight.capacity },
     ledger: {
       entries: ledgerStats.entries,
       running: ledgerStats.running,
       // Says so out loud rather than implying a guarantee we are not making.
-      persistence: ledgerStats.persistence,
+      persistence: reportedPersistence(ledgerStats.persistence),
       ...(ledgerStats.firstError !== undefined ? { firstError: ledgerStats.firstError } : {}),
     },
     deadLetters: deps.deadLetter.count(),
-    retryCancellations: deps.retryCancels(),
-    transport: { mode: deps.config.transport.mode, listeners: deps.transportStatus() },
+    retryCancellations: deps.retryCancels?.() ?? null,
+    transport: { mode: deps.config.transport.mode, listeners: deps.transportStatus?.() ?? null },
     openIssues,
     configWarnings: deps.configWarnings(),
   };
@@ -194,7 +226,7 @@ export async function doctorHandler(deps: ToolDeps) {
     detail:
       stats.persistence === "disabled"
         ? `disabled after a write failure (${stats.firstError ?? "unknown"}); a restart may now re-run work`
-        : stats.persistence,
+        : reportedPersistence(stats.persistence),
   });
 
   const orphans = deps.ledger.listOrphans().length;

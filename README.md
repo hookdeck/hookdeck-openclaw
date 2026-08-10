@@ -281,7 +281,9 @@ Deliberately absent: `disable`, any delete, raw source/destination CRUD, transfo
 
 `hookdeck_setup`'s dry run returns a summary rather than the raw connection spec, because that spec carries `source.config.auth` and `destination.config.auth` — a provider webhook secret must not be echoed into a model's context just because someone asked what would change.
 
-**The tools operate on a running Gateway.** In an embedded run (`openclaw agent --local`) the plugin's service never starts, so every tool reports that plainly rather than inventing empty state.
+**The tools read the plugin's state files, not just the running service.** When a tool call lands in the Gateway process it uses the live service; otherwise it opens the same JSONL state read-only from the state directory. That matters because a tool call is not reliably in the Gateway process — OpenClaw loads the plugin in the CLI process too, and `register()` runs more than once per turn. Depending on the in-memory runtime meant every tool answered "the service is not running" however healthy the deployment was.
+
+Each result carries `source: "live" | "disk"`. On a disk view, in-flight capacity and transport state are reported as `null` rather than zero, because they exist only in the service's memory and a zero would be a lie rather than a gap. Reads are strictly read-only — including suppressing the compaction that loading would otherwise perform — since the Gateway owns those files.
 
 > Two host requirements will silently produce a plugin with no tool surface, and neither throws:
 >
@@ -314,7 +316,7 @@ npm test
 npm run typecheck
 ```
 
-424 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+426 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 

@@ -51,6 +51,7 @@ async function deps(overrides: Partial<ToolDeps> = {}, cfgOverrides = {}): Promi
   const io = createFakeStoreIo();
   return {
     config: parsed.config,
+    source: "live" as const,
     ledger: createMemoryLedger({ ttlHours: 168, instanceId: "test" }),
     deadLetter: await createDeadLetterLog({ ttlHours: 168 }),
     cursors: await createCursorStore({ stateDir: "/state", io }),
@@ -425,5 +426,41 @@ describe("manifest contracts.tools", () => {
     ) as { contracts?: { tools?: string[] } };
 
     expect(manifest.contracts?.tools?.slice().sort()).toEqual([...ALL_TOOL_NAMES].sort());
+  });
+});
+
+describe("a disk-backed view does not look like a degraded one", () => {
+  it("reports persistence as active, not 'readonly'", async () => {
+    // A real agent read `persistence: "readonly"` and concluded events were
+    // "stuck with no automatic retry path". The Gateway was persisting fine;
+    // only our handle was read-only. `source` carries that distinction.
+    const io = createFakeStoreIo();
+    const { createLedger } = await import("../src/store/ledger.js");
+    const d = await deps({
+      source: "disk",
+      ledger: await createLedger({
+        ttlHours: 168,
+        instanceId: "reader",
+        stateDir: "/s",
+        io,
+        readOnly: true,
+      }),
+    });
+
+    const status = await statusHandler(d, {});
+    expect(status.ledger.persistence).toBe("active");
+    expect(status.source).toBe("disk");
+
+    const doc = await doctorHandler(d);
+    expect(doc.checks.find((c) => c.name === "ledger persistence")?.detail).toBe("active");
+  });
+
+  it("reports live-only fields as null rather than zero", async () => {
+    // "0 in flight" from a disk view would be a lie; null is a gap.
+    const d = await deps({ source: "disk", inFlight: undefined, transportStatus: undefined });
+    const status = await statusHandler(d, {});
+    expect(status.inFlight).toBeNull();
+    expect(status.transport.listeners).toBeNull();
+    expect(String(status.note)).toMatch(/state files/i);
   });
 });

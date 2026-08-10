@@ -42,6 +42,8 @@ export interface CursorStoreOptions {
   stateDir?: string;
   io?: StoreIo;
   onDegrade?(error: unknown, path: string): void;
+  /** Open without writing, for a reader in another process. */
+  readOnly?: boolean;
   now?(): number;
 }
 
@@ -60,6 +62,7 @@ export async function createCursorStore(options: CursorStoreOptions = {}): Promi
     // exactly the one you need, and there are only ever a handful of rows.
     isLive: () => true,
     ...(options.onDegrade !== undefined ? { onDegrade: options.onDegrade } : {}),
+    ...(options.readOnly === true ? { readOnly: true } : {}),
     now,
   });
 

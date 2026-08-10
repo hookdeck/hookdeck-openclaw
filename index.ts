@@ -18,6 +18,7 @@ import { deferFor, retryable } from "./src/protocol/outcome.js";
 import { reconcileOrphans } from "./src/recovery.js";
 import { registerHookdeckTools } from "./src/tools/index.js";
 import type { ToolDeps } from "./src/tools/handlers.js";
+import { openDiskState } from "./src/tools/state.js";
 import { createDeadLetterLog, type DeadLetterLog } from "./src/store/deadletter.js";
 import { createInFlightRegistry, type InFlightRegistry } from "./src/store/in-flight.js";
 import { createLedger, type Ledger } from "./src/store/ledger.js";
@@ -158,21 +159,50 @@ export default definePluginEntry({
     // reports "not started yet" rather than throwing if it is called early.
     registerHookdeckTools(api, {
       allowMutations: config.tools.allowMutations,
-      deps: (): ToolDeps | undefined => {
+      // Prefer the live service when the tool call lands in the Gateway
+      // process. Otherwise read the same state from disk, because a tool call
+      // is not reliably in that process — OpenClaw loads the plugin in the CLI
+      // process too, and `register()` demonstrably runs more than once per
+      // turn. Depending on the in-memory runtime meant every tool answered
+      // "the service is not running" however healthy the deployment was.
+      deps: async (): Promise<ToolDeps | undefined> => {
         const active = runtime;
-        if (active === undefined) return undefined;
-        return {
-          config,
-          ledger: active.ledger,
-          deadLetter: active.deadLetter,
-          cursors: active.cursors,
-          inFlight: active.inFlight,
-          logger: log,
-          client: active.client,
-          transportStatus: () => active.transport.status(),
-          retryCancels: () => Object.fromEntries(retryCancels),
-          configWarnings: () => parsed.warnings,
-        };
+        if (active !== undefined) {
+          return {
+            config,
+            source: "live",
+            ledger: active.ledger,
+            deadLetter: active.deadLetter,
+            cursors: active.cursors,
+            inFlight: active.inFlight,
+            logger: log,
+            client: active.client,
+            transportStatus: () => active.transport.status(),
+            retryCancels: () => Object.fromEntries(retryCancels),
+            configWarnings: () => parsed.warnings,
+          };
+        }
+
+        if (!config.storage.enabled) return undefined;
+        try {
+          const disk = await openDiskState({ ttlHours: config.dedupe.ttlHours });
+          const apiKey = await resolveSecret(config.apiKey, "apiKey", hostSecrets).catch(
+            () => undefined,
+          );
+          return {
+            config,
+            source: "disk",
+            ledger: disk.ledger,
+            deadLetter: disk.deadLetter,
+            cursors: disk.cursors,
+            logger: log,
+            ...(apiKey !== undefined ? { client: createHookdeckClient({ apiKey }) } : {}),
+            configWarnings: () => parsed.warnings,
+          };
+        } catch (err) {
+          log.warn(`could not read plugin state from disk: ${String(err)}`);
+          return undefined;
+        }
       },
       schedule: (fn, ms) => {
         const timer = setTimeout(fn, ms);

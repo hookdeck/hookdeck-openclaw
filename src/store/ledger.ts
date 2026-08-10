@@ -11,6 +11,8 @@ export interface LedgerOptions {
   stateDir?: string;
   io?: StoreIo;
   onDegrade?(error: unknown, path: string): void;
+  /** Open without writing, for a reader in another process. */
+  readOnly?: boolean;
   now?(): number;
 }
 
@@ -57,6 +59,7 @@ function buildStore(options: LedgerOptions): JsonlStore<LedgerRow> {
     // whose outcome is unknown, and boot reconciliation depends on finding them.
     isLive: (row, stamp) => !isPrunable(row, stamp, ttlMs),
     ...(options.onDegrade !== undefined ? { onDegrade: options.onDegrade } : {}),
+    ...(options.readOnly === true ? { readOnly: true } : {}),
     now,
   });
 }

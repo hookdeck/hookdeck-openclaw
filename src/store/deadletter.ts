@@ -50,6 +50,8 @@ export interface DeadLetterOptions {
   stateDir?: string;
   io?: StoreIo;
   onDegrade?(error: unknown, path: string): void;
+  /** Open without writing, for a reader in another process. */
+  readOnly?: boolean;
   now?(): number;
 }
 
@@ -69,6 +71,7 @@ export async function createDeadLetterLog(options: DeadLetterOptions): Promise<D
     keyOf: (record) => record.id,
     isLive: (record, stamp) => stamp - record.createdAt <= ttlMs,
     ...(options.onDegrade !== undefined ? { onDegrade: options.onDegrade } : {}),
+    ...(options.readOnly === true ? { readOnly: true } : {}),
     now,
   });
 

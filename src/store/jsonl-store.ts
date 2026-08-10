@@ -14,7 +14,7 @@ import type { StoreIo } from "./store-io.js";
  * trusted-official plugins, and a community plugin cannot qualify.
  */
 
-export type PersistenceState = "active" | "disabled" | "off";
+export type PersistenceState = "active" | "disabled" | "off" | "readonly";
 
 export interface JsonlStoreOptions<T> {
   /** Absolute file path. When omitted the store is memory-only (`off`). */
@@ -27,6 +27,12 @@ export interface JsonlStoreOptions<T> {
   onDegrade?(error: unknown, path: string): void;
   /** Compact once appended lines exceed this multiple of live entries. */
   compactionRatio?: number;
+  /**
+   * Open without ever writing. Required for a reader in another process: the
+   * Gateway owns these files, and a second writer — including the compaction
+   * that `load()` would otherwise perform — can corrupt them.
+   */
+  readOnly?: boolean;
   now?(): number;
 }
 
@@ -66,7 +72,8 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
   const memory = new Map<string, T>();
   const persistent = path !== undefined && io !== undefined;
 
-  let persistence: PersistenceState = persistent ? "active" : "off";
+  const readOnly = options.readOnly === true;
+  let persistence: PersistenceState = persistent ? (readOnly ? "readonly" : "active") : "off";
   let appended = 0;
   let compactions = 0;
   let sinceEvict = 0;
@@ -83,6 +90,7 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
 
   /** Every persistence call funnels through here, so degradation has one home. */
   async function guarded(work: () => Promise<void>): Promise<void> {
+    // `readonly` never reaches here, so a reader cannot append or compact.
     if (persistence !== "active") return;
     const run = queue.then(async () => {
       if (persistence !== "active") return;
@@ -162,9 +170,10 @@ export function createJsonlStore<T>(options: JsonlStoreOptions<T>): JsonlStore<T
 
         // Carry the on-disk line count forward, so a file that is already
         // mostly dead weight is compacted promptly rather than after another
-        // COMPACTION_FLOOR appends.
+        // COMPACTION_FLOOR appends. A read-only opener never compacts: the
+        // file belongs to whichever process is writing it.
         appended = lines;
-        if (skipped > 0 || shouldCompact()) await compactNow();
+        if (!readOnly && (skipped > 0 || shouldCompact())) await compactNow();
       } catch (err) {
         degrade(err);
       }
