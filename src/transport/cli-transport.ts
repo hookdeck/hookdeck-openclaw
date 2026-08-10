@@ -1,11 +1,20 @@
 import type { Logger } from "../ingress/handler.js";
+import { scrubSecrets } from "../plugin/secrets.js";
 import { createBackoff, type BackoffOptions } from "./backoff.js";
 
 /**
  * Supervises one `hookdeck listen` child per route.
  *
- * One child per route is forced by the CLI: the source is a required positional
- * and each process forwards exactly one source.
+ * One child per route is our choice, not the CLI's limit — correcting an
+ * earlier claim in this file. `hookdeck listen` 2.4.0 takes a comma-separated
+ * source list, or `*` for every source, and the positional is optional.
+ *
+ * We do not use that, because `--path` is a single value per invocation. Each
+ * route has its own ingress path, and multiplexing sources through one child
+ * would collapse them onto one path, leaving the source name header as the only
+ * way to tell routes apart. That trades a process for a weaker routing key and
+ * a provisioning model that no longer matches what an operator sees. A process
+ * per route is the cheaper side of that trade.
  *
  * Two flags are not optional in practice:
  *
@@ -117,7 +126,10 @@ export function createCliListener(
   let restartTimer: { cancel(): void } | undefined;
 
   function record(line: string): void {
-    ring.push(line);
+    // Scrubbed at capture, not at read: the ring is surfaced by
+    // `hookdeck_status` and also logged, and a value removed in one place and
+    // not the other has not really been removed.
+    ring.push(scrubSecrets(line, [options.apiKey]));
     if (ring.length > RING_SIZE) ring.shift();
   }
 

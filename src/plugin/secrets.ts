@@ -76,6 +76,30 @@ export async function resolveSecret(
   return resolved.value.length > 0 ? resolved.value : undefined;
 }
 
+/**
+ * Removes known secret values from text bound for a log line or a tool result.
+ *
+ * The child process's output is the case that motivated this. It is captured
+ * into a ring buffer, surfaced by `hookdeck_status`, and it is output we do not
+ * write — a future CLI version echoing a key into a banner would put it into a
+ * model's context with nothing in this repo having changed. Scrubbing what we
+ * know the value of is cheap and does not depend on predicting the format.
+ *
+ * Short values are not substituted: a two-character "secret" would match
+ * everywhere and turn the output into noise.
+ */
+export function scrubSecrets(
+  text: string,
+  secrets: readonly (string | undefined)[],
+): string {
+  let out = text;
+  for (const secret of secrets) {
+    if (secret === undefined || secret.length < 8) continue;
+    out = out.split(secret).join(redact(secret));
+  }
+  return out;
+}
+
 /** Redacts a secret-shaped value bound for a log line or a tool result. */
 export function redact(value: string | undefined): string {
   if (!value) return "(unset)";

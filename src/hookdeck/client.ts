@@ -42,6 +42,8 @@ export interface HookdeckEvent {
   created_at?: string;
   successful_at?: string | null;
   event_data_id?: string;
+  /** Request headers as Hookdeck received them; redacted before they escape. */
+  headers?: Record<string, unknown>;
 }
 
 export interface HookdeckIssue {

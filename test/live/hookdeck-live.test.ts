@@ -138,3 +138,65 @@ run("live Hookdeck API", () => {
     if (!result.ok) expect(result.status).not.toBe(400);
   });
 });
+
+/**
+ * Read-only checks against the endpoints M6 added.
+ *
+ * Deliberately never mutates an Issue. `PUT /issues/{id}` and
+ * `DELETE /issues/{id}` change what the project's operators see in their
+ * dashboard and notifications, and an Issue is not a resource we created, so
+ * the `openclaw-ci-*` teardown rule does not cover it. Their request and
+ * response shapes are asserted against the published OpenAPI document instead;
+ * what is proven here is that the endpoints exist, authenticate, and return the
+ * fields the tools read.
+ */
+run("live Hookdeck API — issues and attempts, read-only", () => {
+  const client = createHookdeckClient({ apiKey: apiKey!, timeoutMs: 15_000 });
+
+  it("lists issues with the fields the tool surfaces", async () => {
+    const result = await client.listIssues({ status: "OPENED", limit: 5 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    for (const issue of result.data) {
+      expect(typeof issue.id).toBe("string");
+      // `type` is what the tool reports as the issue kind. If the API renamed
+      // it, every issue would come back with type: null and nothing else would
+      // notice.
+      expect(issue.type ?? issue.issue_type).toBeDefined();
+    }
+  });
+
+  it("counts issues rather than counting a capped page", async () => {
+    const count = await client.countIssues({ status: "OPENED" });
+    expect(count.ok).toBe(true);
+    if (count.ok) expect(typeof count.data).toBe("number");
+  });
+
+  it("accepts the type filter", async () => {
+    const result = await client.listIssues({ status: "OPENED", type: "delivery" });
+    expect(result.ok).toBe(true);
+  });
+
+  it("returns attempt history for a real event", async () => {
+    const events = await client.listEvents({ limit: 1 });
+    expect(events.ok).toBe(true);
+    if (!events.ok || events.data.length === 0) return;
+
+    const attempts = await client.listAttempts(events.data[0]!.id, 5);
+    expect(attempts.ok).toBe(true);
+    if (!attempts.ok) return;
+
+    // The whole reason for the call: a status per attempt, not just a count.
+    for (const attempt of attempts.data) {
+      expect(typeof attempt.id).toBe("string");
+      expect(attempt.attempt_number).toBeTypeOf("number");
+    }
+  });
+
+  it("reports a missing issue as not_found rather than throwing", async () => {
+    const result = await client.getIssue("iss_does_not_exist_openclaw_ci");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("not_found");
+  });
+});

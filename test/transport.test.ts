@@ -5,6 +5,7 @@ import {
   createCliListener,
   type ChildHandle,
 } from "../src/transport/cli-transport.js";
+import { scrubSecrets } from "../src/plugin/secrets.js";
 import {
   checkCliVersion,
   compareVersions,
@@ -373,5 +374,26 @@ describe("createCliListener", () => {
     expect(spawned).toBe(1);
     expect(listener.state).toBe("stopped");
     expect(child.killed).toContain("SIGTERM");
+  });
+});
+
+describe("child output never carries the API key into a model's context", () => {
+  it("scrubs the key from the ring buffer status exposes", async () => {
+    // We do not write this output. A future CLI version echoing the key into a
+    // banner would put it in front of a model with nothing here having changed.
+    const scrubbed = scrubSecrets(
+      "connecting with HOOKDECK_API_KEY=hk_live_abcdefghijklmnop to project x",
+      ["hk_live_abcdefghijklmnop"],
+    );
+    expect(scrubbed).not.toContain("hk_live_abcdefghijklmnop");
+    expect(scrubbed).toContain("hk_l…op");
+  });
+
+  it("leaves short values alone rather than turning the output into noise", () => {
+    expect(scrubSecrets("state is ok", ["ok"])).toBe("state is ok");
+  });
+
+  it("is a no-op when no key is configured", () => {
+    expect(scrubSecrets("ready on 3000", [undefined])).toBe("ready on 3000");
   });
 });

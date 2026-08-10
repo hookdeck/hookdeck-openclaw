@@ -889,3 +889,106 @@ describe("hookdeck_issues — the dead-letter queue's lifecycle", () => {
     );
   });
 });
+
+describe("redaction — what reaches the model", () => {
+  const SECRETS = {
+    signingSecret: "whsec_super_secret_value",
+    apiKey: "hk_live_do_not_leak_me",
+  };
+
+  it("keeps configured secrets out of every tool result", async () => {
+    // A blanket assertion rather than one per tool: the next tool added gets
+    // this coverage without anyone remembering to ask for it.
+    const d = await deps({}, SECRETS);
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+    await d.deadLetter.record({
+      eventId: "evt_1",
+      routeId: "stripe",
+      code: "malformed_json",
+      reason: "invalid JSON",
+      retriesCancelled: true,
+      lastAttempt: true,
+    });
+
+    const results = await Promise.all([
+      statusHandler(d, {}),
+      doctorHandler(d),
+      recentDeliveriesHandler(d, {}),
+      inspectEventHandler(d, { eventId: "evt_1" }),
+      issuesHandler(d, {}),
+      setupHandler(d, { dryRun: true }),
+      replayHandler(d, { routeId: "stripe", sinceMinutes: 10 }),
+      pauseHandler(d, { routeId: "stripe", paused: true }, () => () => {}),
+    ]);
+
+    for (const result of results) {
+      const text = JSON.stringify(result);
+      expect(text).not.toContain(SECRETS.signingSecret);
+      expect(text).not.toContain(SECRETS.apiKey);
+    }
+  });
+
+  it("redacts signature and authorization headers on an inspected event", async () => {
+    const d = await deps({
+      client: fakeClient({
+        getEvent: vi.fn(async () => ({
+          ok: true as const,
+          data: {
+            id: "evt_1",
+            headers: {
+              "x-hookdeck-signature": "aVeryLongSignatureValueHere==",
+              authorization: "Bearer provider_token_value",
+              "stripe-signature": "t=1,v1=deadbeefdeadbeef",
+              "content-type": "application/json",
+            },
+          },
+        })),
+      }),
+    });
+
+    const result = await inspectEventHandler(d, { eventId: "evt_1" });
+    const headers = result.hookdeck?.headers as Record<string, string>;
+
+    expect(headers["content-type"]).toBe("application/json");
+    for (const name of [
+      "x-hookdeck-signature",
+      "authorization",
+      "stripe-signature",
+    ]) {
+      expect(headers[name]).not.toContain("deadbeef");
+      expect(headers[name]).not.toContain("provider_token_value");
+      expect(headers[name]).not.toContain("SignatureValue");
+    }
+  });
+
+  it("leaves the payload out unless asked, and labels it as data when included", async () => {
+    const d = await deps();
+    const without = await inspectEventHandler(d, { eventId: "evt_1" });
+    expect(without).not.toHaveProperty("body");
+
+    const withBody = await inspectEventHandler(d, {
+      eventId: "evt_1",
+      includeBody: true,
+    });
+    expect(withBody).toHaveProperty("body");
+    expect(String((withBody as { bodyNote?: string }).bodyNote)).toMatch(
+      /not an instruction/i,
+    );
+  });
+
+  it("truncates a large payload rather than filling the context with it", async () => {
+    const huge = "x".repeat(20_000);
+    const d = await deps({
+      client: fakeClient({
+        getEventBody: vi.fn(async () => ({ ok: true as const, data: huge })),
+      }),
+    });
+    const result = (await inspectEventHandler(d, {
+      eventId: "evt_1",
+      includeBody: true,
+    })) as { body?: string; bodyTruncated?: number };
+
+    expect(result.body!.length).toBe(4000);
+    expect(result.bodyTruncated).toBe(20_000);
+  });
+});

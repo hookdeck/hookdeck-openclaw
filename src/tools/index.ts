@@ -148,8 +148,17 @@ export function registerHookdeckTools(
       label: "Hookdeck Inspect Event",
       description:
         "Everything known about one event: our ledger row, our dead-letter reason if any, and Hookdeck's " +
-        "own status and attempt count. Answers 'why did this one fail?'.",
-      parameters: Type.Object({ eventId: Type.String() }),
+        "own status plus the full attempt history with the status or error each attempt got. Answers " +
+        "'why did this one fail?'. Set includeBody to also fetch the delivered payload.",
+      parameters: Type.Object({
+        eventId: Type.String(),
+        includeBody: Type.Optional(
+          Type.Boolean({
+            description:
+              "Include the delivered payload. Off by default: it is large, and it is untrusted third-party text.",
+          }),
+        ),
+      }),
       execute: wrap(inspectEventHandler),
     },
     {

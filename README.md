@@ -267,15 +267,16 @@ Seven tools, matching the shared contract's five operator verbs plus two read to
 |---|---|
 | `hookdeck_status` | "Are webhooks working?" — routes, capacity, ledger persistence, dead-letter count, open issues, transport state, config warnings |
 | `hookdeck_recent_deliveries` | "Did anything break overnight?" — open Hookdeck Issues, plus failures Hookdeck cannot see |
-| `hookdeck_inspect_event` | "Why did *this* one fail?" — our row and reason beside Hookdeck's status |
+| `hookdeck_inspect_event` | "Why did *this* one fail?" — our row and reason beside Hookdeck's status and full attempt history; payload on request |
 | `hookdeck_doctor` | What's misconfigured, including whether each connection's retry rule still covers every status we emit |
 | `hookdeck_setup` | Provisions connections. Dry run by default |
 | `hookdeck_pause` | Pause/resume a connection. Auto-resumes within an hour |
 | `hookdeck_replay` | Retry specific events, or a scoped bulk replay. Dry run unless `confirm: true`. Caps at 100 ids per call and says what it dropped |
+| `hookdeck_issues` | The dead-letter queue's lifecycle: list, acknowledge, resolve, ignore, dismiss. Replays nothing, and says so |
 
 `tools.allowMutations: false` reduces this to the four read tools, for an agent that can diagnose but not act.
 
-Three safety rails are deliberate. **`hookdeck_setup` defaults to a dry run**, so an agent has to mean it. **`hookdeck_replay` refuses a filtered replay without `confirm: true`**, because an unscoped retry-everything costs real money. And **`hookdeck_pause` always schedules an auto-resume**, clamped to an hour, because an agent that pauses and then loses the thread must not stop the pipeline indefinitely.
+Four safety rails are deliberate. **`hookdeck_setup` defaults to a dry run**, so an agent has to mean it. **`hookdeck_replay` refuses a filtered replay without `confirm: true`**, because an unscoped retry-everything costs real money. **`hookdeck_pause` always schedules an auto-resume**, clamped to an hour, because an agent that pauses and then loses the thread must not stop the pipeline indefinitely. And **every `hookdeck_issues` mutation states that it replayed nothing** — "resolved" reads like "fixed", and an agent that resolves without replaying has tidied the dashboard and left the work undone.
 
 Deliberately absent: `disable`, any delete, raw source/destination CRUD, transformation overwrite. Their failure mode is irrecoverable event loss and an agent cannot judge the blast radius.
 
@@ -317,6 +318,15 @@ Deliberately not reimplemented, listed because the temptation is real:
 
 Route `filters` are the one deliberate overlap. Hookdeck can filter server-side and doing it there is better — a filtered event never reaches the agent and costs nothing — so the local ones exist only for decisions a connection cannot express.
 
+### What reaches the model
+
+Payload text from a webhook is third-party input, and the tools treat it that way:
+
+- Signature, `Authorization`, cookie and token headers are redacted before an inspected event's headers are returned.
+- The delivered body is **opt-in** (`includeBody`), truncated at 4,000 characters, and labelled as data rather than presented as something addressed to the reader.
+- The `hookdeck listen` child's output is scrubbed of the API key as it is captured, not as it is read — that output is surfaced by `hookdeck_status` and we do not write it, so a future CLI version echoing a key into a banner would otherwise land it in a model's context with nothing here having changed.
+- A test asserts that no configured secret appears in *any* tool's result, so the next tool added inherits the check.
+
 ## Trust boundary
 
 **A valid signature authenticates the sender, not the content.** Webhook payload text is third-party input that ends up in a prompt reaching a model with tools.
@@ -341,7 +351,7 @@ npm test
 npm run typecheck
 ```
 
-438 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+480 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 

@@ -29,6 +29,16 @@
           "path": "routes.*.signingSecret",
           "expected": "string",
           "ownerKind": "route"
+        },
+        {
+          "path": "apiKey",
+          "expected": "string",
+          "ownerKind": "plugin"
+        },
+        {
+          "path": "routes.*.verification.credentials.*",
+          "expected": "string",
+          "ownerKind": "route"
         }
       ]
     }

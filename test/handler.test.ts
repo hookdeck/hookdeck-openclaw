@@ -18,6 +18,7 @@ import {
 } from "../src/ingress/handler.js";
 import { computeHookdeckSignature } from "../src/protocol/signature.js";
 import { createInFlightRegistry } from "../src/store/in-flight.js";
+import { createDeadLetterLog } from "../src/store/deadletter.js";
 import { createMemoryLedger } from "../src/store/ledger.js";
 
 const SECRET = "whsec_test";
@@ -775,5 +776,223 @@ describe("handleDelivery — dispatcher admission happens before the ledger writ
     const { deps, dispatch } = harness();
     expect((await handleDelivery(deps, request())).plan.status).toBe(200);
     expect(dispatch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("white-label header prefix — the whole pipeline, not just the parser", () => {
+  // A project can rename the `x-hookdeck` prefix. Every prefixed header moves
+  // together, so getting this wrong does not fail loudly: signatures go
+  // unverified-looking, dedupe silently stops, and last-attempt detection
+  // never fires. The parser has unit tests; this asserts the pipeline honours
+  // the config end to end.
+  const PREFIXES = ["x-hookdeck", "x-acme", "x-events-gw", "X-Mixed-Case"];
+
+  function prefixed(
+    prefix: string,
+    options: {
+      body?: string;
+      eventId?: string;
+      attemptCount?: string;
+      willRetryAfter?: string;
+    } = {},
+  ): IncomingDelivery {
+    const p = prefix.toLowerCase();
+    const body = options.body ?? '{"type":"invoice.paid"}';
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      [`${p}-signature`]: computeHookdeckSignature(
+        Buffer.from(body, "utf8"),
+        SECRET,
+      ),
+      [`${p}-eventid`]: options.eventId ?? "evt_wl",
+      [`${p}-attempt-count`]: options.attemptCount ?? "1",
+      [`${p}-source-name`]: "stripe",
+      ...(options.willRetryAfter !== undefined
+        ? { [`${p}-will-retry-after`]: options.willRetryAfter }
+        : {}),
+    };
+    return {
+      method: "POST",
+      url: "/hookdeck/stripe",
+      headers,
+      stream: Object.assign(Readable.from([Buffer.from(body, "utf8")]), {
+        headers,
+      }),
+    };
+  }
+
+  for (const prefix of PREFIXES) {
+    describe(prefix, () => {
+      const config = () => buildConfig({ headerPrefix: prefix });
+
+      it("verifies and dispatches", async () => {
+        const { deps, dispatch } = harness({ config: config() });
+        const result = await handleDelivery(deps, prefixed(prefix));
+        expect(result.plan.status).toBe(200);
+        expect(dispatch).toHaveBeenCalledOnce();
+      });
+
+      it("still deduplicates", async () => {
+        const { deps, dispatch } = harness({ config: config() });
+        await handleDelivery(deps, prefixed(prefix));
+        const second = await handleDelivery(deps, prefixed(prefix));
+        expect(second.plan.code).toBe("duplicate");
+        expect(dispatch).toHaveBeenCalledOnce();
+      });
+
+      it("still admits a genuine redelivery", async () => {
+        const { deps, dispatch } = harness({ config: config() });
+        await handleDelivery(deps, prefixed(prefix));
+        await handleDelivery(deps, prefixed(prefix, { attemptCount: "2" }));
+        expect(dispatch).toHaveBeenCalledTimes(2);
+      });
+
+      it("still detects the last automatic attempt", async () => {
+        // Absent `…-will-retry-after` means Hookdeck will not retry again, and
+        // is what triggers the local record. Under a custom prefix a hardcoded
+        // header name is always absent, so every attempt would look final.
+        const deadLetter = await createDeadLetterLog({ ttlHours: 168 });
+        const { deps } = harness({
+          config: config(),
+          dispatch: async () => ({
+            settle: "failed",
+            plan: retryable(503, "downstream"),
+          }),
+        });
+        deps.deadLetter = deadLetter;
+
+        await handleDelivery(
+          deps,
+          prefixed(prefix, { eventId: "evt_a", willRetryAfter: "60" }),
+        );
+        expect(deadLetter.count()).toBe(0);
+
+        await handleDelivery(deps, prefixed(prefix, { eventId: "evt_b" }));
+        expect(deadLetter.list()[0]).toMatchObject({
+          eventId: "evt_b",
+          lastAttempt: true,
+        });
+      });
+    });
+  }
+
+  it("rejects default-prefixed headers when a custom prefix is configured", async () => {
+    // The misconfiguration must fail closed. `Idempotency-Key` is unprefixed
+    // so identity survives, but the signature does not — and an unsigned
+    // request is never admitted.
+    const { deps, dispatch } = harness({
+      config: buildConfig({ headerPrefix: "x-acme" }),
+    });
+    const result = await handleDelivery(deps, request());
+    expect(result.plan.status).toBeGreaterThanOrEqual(400);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("secret rotation — the drill", () => {
+  // Hookdeck's rotation slot puts the new signature in `…-signature-2` while
+  // the old secret still signs `…-signature`. A verifier that checks only the
+  // primary slot, or that caches the secret, fails every delivery for the
+  // length of the rotation window. Nothing about that failure says "rotation".
+  const OLD = "whsec_old";
+  const NEW = "whsec_new";
+
+  function signedWith(options: {
+    primary?: string;
+    rotation?: string;
+    eventId?: string;
+  }): IncomingDelivery {
+    const body = '{"type":"invoice.paid"}';
+    const bytes = Buffer.from(body, "utf8");
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "x-hookdeck-eventid": options.eventId ?? "evt_rot",
+      "x-hookdeck-attempt-count": "1",
+      ...(options.primary !== undefined
+        ? {
+            "x-hookdeck-signature": computeHookdeckSignature(
+              bytes,
+              options.primary,
+            ),
+          }
+        : {}),
+      ...(options.rotation !== undefined
+        ? {
+            "x-hookdeck-signature-2": computeHookdeckSignature(
+              bytes,
+              options.rotation,
+            ),
+          }
+        : {}),
+    };
+    return {
+      method: "POST",
+      url: "/hookdeck/stripe",
+      headers,
+      stream: Object.assign(Readable.from([bytes]), { headers }),
+    };
+  }
+
+  it("accepts the rotation slot while the primary is still the old secret", async () => {
+    const { deps, dispatch } = harness({ secret: NEW });
+    const result = await handleDelivery(
+      deps,
+      signedWith({ primary: OLD, rotation: NEW }),
+    );
+    expect(result.plan.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("accepts the primary slot before the rotation completes", async () => {
+    const { deps } = harness({ secret: OLD });
+    const result = await handleDelivery(
+      deps,
+      signedWith({ primary: OLD, rotation: NEW }),
+    );
+    expect(result.plan.status).toBe(200);
+  });
+
+  it("rejects when neither slot matches", async () => {
+    const { deps, dispatch } = harness({ secret: "whsec_unrelated" });
+    const result = await handleDelivery(
+      deps,
+      signedWith({ primary: OLD, rotation: NEW }),
+    );
+    expect(result.plan.status).toBe(401);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("picks up a rotated secret mid-flight, without a restart", async () => {
+    // The secret is re-resolved per request rather than captured at start.
+    // If it were cached, rotation would need a Gateway restart, and the
+    // symptom would be a flood of 401s with no obvious cause.
+    let current = OLD;
+    const { deps, dispatch } = harness();
+    deps.resolveSigningSecret = async () => current;
+
+    const before = await handleDelivery(
+      deps,
+      signedWith({ primary: NEW, eventId: "evt_a" }),
+    );
+    expect(before.plan.status).toBe(401);
+
+    current = NEW;
+    const after = await handleDelivery(
+      deps,
+      signedWith({ primary: NEW, eventId: "evt_b" }),
+    );
+    expect(after.plan.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the event alive when the secret cannot be resolved at all", async () => {
+    // An absent secret is a failure, never a bypass — but it is also fixable
+    // by a config change, so the event must survive in Hookdeck until it is.
+    const { deps, dispatch } = harness({ secret: undefined });
+    const result = await handleDelivery(deps, signedWith({ primary: OLD }));
+
+    expect(result.plan.status).toBe(503);
+    expect(result.plan.retry.kind).not.toBe("cancel");
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });
