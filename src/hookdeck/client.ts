@@ -26,7 +26,14 @@ export interface HookdeckClientOptions {
 
 export type ApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; status?: number; code: string; message: string };
+  | {
+      ok: false;
+      status?: number;
+      code: string;
+      message: string;
+      /** Present on `rate_limited` when the response said how long to wait. */
+      retryAfterSeconds?: number;
+    };
 
 export interface HookdeckConnection {
   id: string;
@@ -232,6 +239,29 @@ export function createHookdeckClient(
         } catch {
           // Non-JSON error body; the status line is enough.
         }
+
+        // Rate limiting gets its own code and says when to come back. A caller
+        // looping over events — `hookdeck_replay` does, up to 100 — would
+        // otherwise report a generic failure per event, which reads as "those
+        // events are broken" rather than "slow down".
+        if (response.status === 429) {
+          const retryAfter = Number.parseInt(
+            response.headers.get("retry-after") ?? "",
+            10,
+          );
+          return {
+            ok: false,
+            status: 429,
+            code: "rate_limited",
+            message: Number.isFinite(retryAfter)
+              ? `${message} (rate limited; retry after ${retryAfter}s)`
+              : `${message} (rate limited)`,
+            ...(Number.isFinite(retryAfter)
+              ? { retryAfterSeconds: retryAfter }
+              : {}),
+          };
+        }
+
         return {
           ok: false,
           status: response.status,

@@ -67,8 +67,11 @@ export async function recentDeliveriesHandler(
     }
   } else {
     issuesNote =
-      "No API key configured, so Hookdeck Issues — the actual dead-letter queue — could not be read. " +
-      "Only locally-recorded outcomes are shown below.";
+      (deps.apiKeyUnresolved === true
+        ? "The Hookdeck API key could not be resolved in this process, so Issues — the actual " +
+          "dead-letter queue — could not be read. The config is fine; run this from the Gateway. "
+        : "No API key is configured, so Hookdeck Issues — the actual dead-letter queue — could " +
+          "not be read. ") + "Only locally-recorded outcomes are shown below.";
   }
 
   const postAck = rows.filter((r) => r.hookdeckVisible !== true);

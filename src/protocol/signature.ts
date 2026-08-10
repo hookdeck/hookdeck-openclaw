@@ -5,9 +5,21 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  *
  *   base64( HMAC-SHA256( raw_body_bytes, signing_secret ) )
  *
- * The secret is project-level, not per-connection. No timestamp is signed, so
- * the signature carries no replay protection on its own — deduplication is what
- * provides that, and it is mandatory rather than optional.
+ * What this does and does not prove is worth being exact about, because the
+ * scheme is narrower than "the request is authentic":
+ *
+ *  - It proves the BODY came from a project holding the signing secret.
+ *  - It does not cover any header, so the event id, the attempt count and the
+ *    source name all arrive unauthenticated.
+ *  - The secret is project-level, so a signature does not bind a body to a
+ *    particular route or connection.
+ *  - No timestamp is signed, so a captured (body, signature) pair stays valid
+ *    indefinitely.
+ *
+ * Deduplication is therefore load-bearing rather than an optimisation, and it
+ * is deduplication over UNSIGNED inputs: anyone holding one captured pair can
+ * re-present it with a fresh event id. `MAX_PLAUSIBLE_ATTEMPT` in
+ * `admission.ts` limits the damage from the worst version of that.
  *
  * Everything here is pure and operates on bytes. The raw body must be the exact
  * octets Hookdeck sent: re-serialising parsed JSON will not reproduce them.

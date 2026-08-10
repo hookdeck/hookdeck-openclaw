@@ -50,8 +50,21 @@ export interface ToolDeps {
   resolveVerification?:
     | ((routeId: string) => Promise<Record<string, string> | undefined>)
     | undefined;
+  /**
+   * An apiKey is configured but could not be resolved in this process.
+   *
+   * A secretRef needs the host's secret runtime, which only the Gateway's
+   * service start receives. Reporting that as "no API key is configured" sends
+   * someone to fix a config that is already correct.
+   */
+  apiKeyUnresolved?: boolean;
   now?(): number;
 }
+
+export const KEY_UNRESOLVED =
+  "An apiKey is configured but could not be resolved here: this call is not running in the " +
+  "Gateway process, and a secret reference needs the host's secret runtime. The config is fine — " +
+  "run this from the Gateway, or set the key inline to make it readable from either process.";
 
 export const NO_CLIENT =
   "No Hookdeck API key is configured, so this needs an operator rather than an agent.";
@@ -73,7 +86,8 @@ export const RETENTION_NOTE =
 export function requireClient(
   deps: ToolDeps,
 ): HookdeckClient | { error: string } {
-  return deps.client ?? { error: NO_CLIENT };
+  if (deps.client !== undefined) return deps.client;
+  return { error: deps.apiKeyUnresolved === true ? KEY_UNRESOLVED : NO_CLIENT };
 }
 
 export function isError(value: unknown): value is { error: string } {

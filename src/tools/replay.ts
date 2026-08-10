@@ -31,6 +31,7 @@ export async function replayHandler(
     const dropped = params.eventIds.length - accepted.length;
     const outcomes = [];
     let aged = 0;
+    let rateLimited: number | undefined;
     for (const id of accepted) {
       const result = await client.retryEvent(id);
       if (!result.ok && result.code === "not_found") aged += 1;
@@ -39,6 +40,14 @@ export async function replayHandler(
         ok: result.ok,
         ...(result.ok ? {} : { error: result.message }),
       });
+
+      // Stop rather than finish the loop. Every remaining call would fail the
+      // same way, and a list of generic errors invites a caller to re-submit
+      // the whole batch.
+      if (!result.ok && result.code === "rate_limited") {
+        rateLimited = result.retryAfterSeconds;
+        break;
+      }
     }
     return {
       ok: true,
@@ -55,6 +64,16 @@ export async function replayHandler(
       // A 404 on retry is almost always retention, not a typo, and an agent
       // will otherwise re-try the same dead ids.
       ...(aged > 0 ? { notFound: aged, retentionNote: RETENTION_NOTE } : {}),
+      ...(rateLimited !== undefined || outcomes.length < accepted.length
+        ? {
+            stoppedEarly: true,
+            note:
+              `Hookdeck rate-limited this batch after ${outcomes.length} of ${accepted.length}. ` +
+              `Nothing after that was retried. Wait${
+                rateLimited !== undefined ? ` ${rateLimited}s` : ""
+              } and call again with the remaining ids.`,
+          }
+        : {}),
     };
   }
 

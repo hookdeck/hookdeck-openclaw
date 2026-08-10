@@ -51,9 +51,12 @@ export function createBackoff(options: BackoffOptions = {}): Backoff {
       }
       const base = Math.min(max, initial * factor ** failures);
       failures += 1;
-      // Symmetric jitter, floored at zero.
+      // Symmetric jitter, then clamped: applying it after the cap lets the
+      // upper half of the spread exceed maxDelayMs, so the documented maximum
+      // is not one.
       const spread = base * jitter;
-      return Math.max(0, Math.round(base - spread + random() * spread * 2));
+      const delay = Math.round(base - spread + random() * spread * 2);
+      return Math.min(max, Math.max(0, delay));
     },
 
     markHealthy(connectedForMs) {

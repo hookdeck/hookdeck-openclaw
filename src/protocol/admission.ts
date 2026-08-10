@@ -13,8 +13,22 @@
  *   When the attempt header is absent, admit only if the previous run for that
  *   event is recorded as failed.
  *
+ * Both inputs — the event id and the attempt count — arrive in unsigned
+ * headers, since the HMAC covers only the body. An absurd attempt count would
+ * otherwise retire every legitimate redelivery of that event as a duplicate,
+ * so one is treated as no attempt count at all.
+ *
  * Storage is the host's business; this rule is not.
  */
+
+/**
+ * Above this, an attempt count is not believable.
+ *
+ * Hookdeck's own ceiling is 50 automatic attempts, and manual retries and
+ * replays add few enough that a five-digit count means the header is wrong or
+ * hostile, not that an event has genuinely been tried that often.
+ */
+export const MAX_PLAUSIBLE_ATTEMPT = 10_000;
 
 export type LedgerStatus = "running" | "succeeded" | "failed" | "exhausted";
 
@@ -49,10 +63,27 @@ export type AdmissionDecision =
         "duplicate_attempt" | "in_flight" | "already_succeeded" | "exhausted";
     };
 
+/**
+ * Discards an attempt count we do not believe.
+ *
+ * Applied wherever the header is used, not only when admitting: recording an
+ * implausible value would raise the bar above every real redelivery of that
+ * event and retire them all as duplicates. The header is unsigned, so this is
+ * reachable by anyone who can replay a captured body.
+ */
+export function plausibleAttempt(
+  attemptCount: number | undefined,
+): number | undefined {
+  if (attemptCount === undefined) return undefined;
+  return attemptCount > MAX_PLAUSIBLE_ATTEMPT ? undefined : attemptCount;
+}
+
 export function decideAdmission(
   row: LedgerRow | undefined,
-  attemptCount: number | undefined,
+  rawAttemptCount: number | undefined,
 ): AdmissionDecision {
+  const attemptCount = plausibleAttempt(rawAttemptCount);
+
   if (row === undefined) return { admit: true, reason: "first_delivery" };
 
   if (attemptCount !== undefined) {

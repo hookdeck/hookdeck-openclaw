@@ -325,8 +325,11 @@ describe("agent dispatch — admission control", () => {
     expect(second.plan.status).toBe(503);
     expect(second.plan.code).toBe("busy");
     expect(second.plan.retry).toEqual({ kind: "after", seconds: 10 });
-    // Nothing recorded for a deferred event.
-    expect(second.settle).toBe("deferred");
+    // `failed`, not `deferred`. The handler checks `canAccept` before writing a
+    // row, so normally nothing is recorded at all — but if this guard is
+    // reached, a row already exists and `deferred` would leave it `running`
+    // with no background run to settle it.
+    expect(second.settle).toBe("failed");
 
     release();
     await settled();
@@ -404,5 +407,17 @@ describe("agent dispatch — a runner that cannot observe completion", () => {
     const outcome = await dispatcher.dispatch(ctx);
     expect(outcome.plan.status).toBe(503);
     expect(outcome.plan.code).toBe("agent_start_failed");
+  });
+});
+
+describe("the in-dispatch capacity guard must not strand the row", () => {
+  it("settles rather than deferring, so recovery can see it", async () => {
+    const { dispatcher, ledger } = await harness({ maxConcurrentRuns: 0 });
+    await ledger.begin(ctx.delivery.eventId!, 1);
+
+    const outcome = await dispatcher.dispatch(ctx);
+
+    expect(outcome.plan.status).toBe(503);
+    expect(outcome.settle).toBe("failed");
   });
 });

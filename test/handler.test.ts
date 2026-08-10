@@ -1089,3 +1089,19 @@ describe("a dispatcher that throws must not strand the ledger row", () => {
     expect(inFlight.size).toBe(0);
   });
 });
+
+describe("an unsigned attempt count cannot poison an event", () => {
+  it("does not record an implausible attempt, so real redeliveries still run", async () => {
+    // The HMAC covers only the body, so this header is attacker-reachable by
+    // anyone who can replay a captured (body, signature) pair. Recording it
+    // would retire every genuine redelivery of the event as a duplicate.
+    const { deps, dispatch, ledger } = harness();
+
+    await handleDelivery(deps, request({ attemptCount: "999999999" }));
+    expect(ledger.get("evt_1")?.attempt).toBe(1);
+
+    const real = await handleDelivery(deps, request({ attemptCount: "2" }));
+    expect(real.plan.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+});

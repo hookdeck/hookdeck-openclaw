@@ -277,12 +277,32 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       });
     }
 
-    if (route.dispatch.mode === "agent" && route.dispatch.deliver) {
-      warnings.push({
-        path: `routes.${routeId}.dispatch.deliver`,
-        message:
-          "deliver is enabled on a webhook-triggered route: an injected payload could cause an outbound message",
-      });
+    if (route.dispatch.mode === "agent") {
+      // Both are carried in the config and neither reaches the runner: agent
+      // turns go through TaskFlow `run_task`, which takes a goal and nothing
+      // else. Saying so is better than an operator setting `deliver: false` and
+      // believing it is doing something.
+      if (route.dispatch.deliver) {
+        warnings.push({
+          path: `routes.${routeId}.dispatch.deliver`,
+          message:
+            "deliver has no effect on the TaskFlow transport and is not passed to the agent turn; it is recorded for a future transport that can carry it",
+        });
+      }
+      if (route.dispatch.lane !== undefined) {
+        warnings.push({
+          path: `routes.${routeId}.dispatch.lane`,
+          message:
+            "lane has no effect on the TaskFlow transport and is not passed to the agent turn",
+        });
+      }
+      if (route.dispatch.ackMode === "sync") {
+        warnings.push({
+          path: `routes.${routeId}.dispatch.ackMode`,
+          message:
+            "sync needs a completion signal the TaskFlow transport does not provide; this route will behave as async_retry",
+        });
+      }
     }
 
     routes[routeId] = {

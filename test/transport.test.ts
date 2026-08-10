@@ -397,3 +397,44 @@ describe("child output never carries the API key into a model's context", () => 
     expect(scrubSecrets("ready on 3000", [undefined])).toBe("ready on 3000");
   });
 });
+
+describe("prerelease ordering follows semver, not string order", () => {
+  const v = (s: string) => parseCliVersion(s)!;
+
+  it("orders numeric identifiers numerically", () => {
+    // A plain string compare puts beta.10 below beta.9 — the exact range a
+    // version gate has to get right.
+    expect(
+      compareVersions(v("2.4.0-beta.10"), v("2.4.0-beta.9")),
+    ).toBeGreaterThan(0);
+    expect(compareVersions(v("2.4.0-beta.2"), v("2.4.0-beta.10"))).toBeLessThan(
+      0,
+    );
+  });
+
+  it("sorts a shorter identifier list lower", () => {
+    expect(compareVersions(v("2.4.0-beta"), v("2.4.0-beta.1"))).toBeLessThan(0);
+  });
+
+  it("sorts numeric identifiers below alphanumeric ones", () => {
+    expect(compareVersions(v("2.4.0-1"), v("2.4.0-alpha"))).toBeLessThan(0);
+  });
+
+  it("still puts any prerelease below its release", () => {
+    expect(compareVersions(v("2.4.0-beta.99"), v("2.4.0"))).toBeLessThan(0);
+  });
+});
+
+describe("backoff never exceeds its documented maximum", () => {
+  it("clamps after jitter, not before", () => {
+    const backoff = createBackoff({
+      initialDelayMs: 1_000,
+      maxDelayMs: 30_000,
+      jitter: 0.5,
+      random: () => 1, // the top of the spread
+    });
+    for (let i = 0; i < 12; i += 1) {
+      expect(backoff.next()!).toBeLessThanOrEqual(30_000);
+    }
+  });
+});

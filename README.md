@@ -341,7 +341,9 @@ Signature headers and resolved secrets are redacted from logs.
 
 Not yet implemented:
 
-- **No completion tracking for agent turns.** See [Agent turns](#agent-turns) — `sync` and `maxAgentRetries` need a completion hook the TaskFlow transport does not provide.
+- **No completion tracking for agent turns.** See [Agent turns](#agent-turns). Agent turns run through TaskFlow `run_task`, which exposes flow state rather than a completion signal, so `ackMode: "sync"` behaves as `async_retry`, and `deliver` and `lane` are recorded but not passed to the turn. Each is warned about at startup rather than failing quietly.
+- **A signature authenticates the body, not the headers.** Hookdeck's HMAC covers the raw body only, with a project-level secret and no signed timestamp. So the event id and attempt count arrive unauthenticated, and a captured `(body, signature)` pair stays valid. Deduplication is what provides replay protection, an implausible attempt count is discarded rather than recorded, and provider verification at the Source is the layer that keeps unsigned traffic out in the first place.
+- **List endpoints read the first page only.** `hookdeck_issues` and `hookdeck_recent_deliveries` report a real total from the count endpoint, but return one page of results.
 
 ## Development
 
@@ -351,7 +353,7 @@ npm test
 npm run typecheck
 ```
 
-526 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, the store suites inject write failures at an exact call to prove the degradation rule, and `test/store-io.test.ts` runs against a real filesystem because that is the only place durability actually lives.
+559 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, the store suites inject write failures at an exact call to prove the degradation rule, and `test/store-io.test.ts` runs against a real filesystem because that is the only place durability actually lives.
 
 ## Shared reliability contract
 

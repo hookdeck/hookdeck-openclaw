@@ -15,6 +15,21 @@ export interface RawBodySource extends AsyncIterable<
   headers?: Record<string, string | string[] | undefined>;
 }
 
+/**
+ * Stops a stream we have finished with.
+ *
+ * Optional because the interface is deliberately narrow — tests pass plain
+ * async iterables — but a real `IncomingMessage` always has it.
+ */
+function destroy(req: RawBodySource): void {
+  const destroyable = req as { destroy?: () => void };
+  try {
+    destroyable.destroy?.();
+  } catch {
+    // Already torn down.
+  }
+}
+
 export interface ReadRawBodyOptions {
   maxBytes: number;
   timeoutMs: number;
@@ -74,7 +89,14 @@ export async function readRawBody(
   })();
 
   try {
-    return await Promise.race([read, timeout]);
+    const result = await Promise.race([read, timeout]);
+
+    // Destroy on any failure, not just success-by-timeout. Without this the
+    // `for await` keeps buffering after we have answered, so a slow client can
+    // hold a request's worth of memory per connection for as long as it likes.
+    if (!result.ok) destroy(req);
+
+    return result;
   } finally {
     if (timer) clearTimeout(timer);
   }

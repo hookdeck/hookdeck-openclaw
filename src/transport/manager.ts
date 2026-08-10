@@ -74,6 +74,7 @@ export function createTransportManager(
   const { config, cursors, logger } = deps;
   const now = deps.now ?? Date.now;
   const listeners = new Map<string, CliListener>();
+  let started = false;
 
   /**
    * Stamps the start of an outage, once.
@@ -149,9 +150,10 @@ export function createTransportManager(
     }
   }
 
-  async function unpauseIfWePaused(): Promise<void> {
+  async function unpauseIfWePaused(routeId?: string): Promise<void> {
     if (deps.client === undefined) return;
     for (const cursor of cursors.all()) {
+      if (routeId !== undefined && cursor.routeId !== routeId) continue;
       if (cursor.pausedByUs !== true || cursor.connectionId === undefined)
         continue;
       const result = await deps.client.unpauseConnection(cursor.connectionId);
@@ -168,9 +170,11 @@ export function createTransportManager(
     }
   }
 
-  async function catchUp(): Promise<void> {
+  async function catchUp(routeId?: string): Promise<void> {
     if (!config.catchUp.enabled || deps.client === undefined) return;
-    for (const routeId of Object.keys(config.routes)) {
+    const routeIds =
+      routeId === undefined ? Object.keys(config.routes) : [routeId];
+    for (const routeId of routeIds) {
       const cursor = cursors.get(routeId);
       if (
         cursor?.lastDisconnectAt === undefined ||
@@ -194,8 +198,39 @@ export function createTransportManager(
               : ""
           }`,
         );
+        // Cleared on accepted rather than on delivered, which is sound only
+        // because this runs with a listener attached: from here the replayed
+        // requests are events in Hookdeck's own retry pipeline, so a tunnel
+        // that drops again fails them retryably instead of discarding them.
         await cursors.clear(routeId, "lastDisconnectAt");
       }
+    }
+  }
+
+  /**
+   * Releases held events and replays the outage window for one route, once its
+   * listener is actually attached.
+   *
+   * Ordering is the whole point. Under CLI transport an event delivered with no
+   * session attached is discarded rather than queued, so unpausing or replaying
+   * before the tunnel is up sends the recovered traffic into nothing and it is
+   * gone for good. With a session attached a delivery that fails is
+   * `CLI_UNAVAILABLE` and stays in the retry pipeline, which is also what makes
+   * it safe to clear the disconnect cursor once the replay is accepted.
+   *
+   * Also runs on every reconnect, not only at boot: a tunnel that drops and
+   * returns has its own outage window to recover.
+   */
+  async function recoverRoute(routeId: string): Promise<void> {
+    try {
+      await unpauseIfWePaused(routeId);
+      await catchUp(routeId);
+    } catch (err) {
+      logger.warn(
+        `route '${routeId}': recovery after connect failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
   }
 
@@ -249,6 +284,7 @@ export function createTransportManager(
           spawn: deps.spawn,
           logger,
           onDisconnect: (id) => recordDisconnect(id),
+          onConnected: (id) => recoverRoute(id),
           now,
         },
       );
@@ -259,15 +295,32 @@ export function createTransportManager(
 
   return {
     async start() {
+      // A second start would orphan the children the first one spawned, with no
+      // handle left to kill them.
+      if (started) {
+        logger.warn("transport already started; ignoring a second start()");
+        return;
+      }
+      started = true;
+
       await seedConfiguredConnectionIds();
       await provision();
-      await unpauseIfWePaused();
-      await catchUp();
-      // Passed to the child via env only, never argv.
-      await startListeners(deps.apiKey);
+
+      // Under CLI transport, recovery is driven by `onConnected` per route:
+      // replaying into a tunnel that is not up yet discards the events. Other
+      // modes have no attach event and the destination is always reachable, so
+      // they recover immediately.
+      if (config.transport.mode === "cli") {
+        // Passed to the child via env only, never argv.
+        await startListeners(deps.apiKey);
+      } else {
+        await unpauseIfWePaused();
+        await catchUp();
+      }
     },
 
     async stop() {
+      started = false;
       // Pause FIRST. Stopping the listener cleanly forfeits the grace window,
       // so anything arriving between the two would be discarded rather than
       // held.

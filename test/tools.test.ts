@@ -1270,3 +1270,41 @@ describe("limits are clamped at both ends", () => {
     expect(rows).toBe(1);
   });
 });
+
+describe("a configured-but-unresolvable API key is not reported as missing", () => {
+  // A secretRef needs the host's secret runtime, which only the Gateway's
+  // service start receives. "No API key is configured" would send someone to
+  // fix a config that is already correct.
+  it("says the key could not be resolved here, not that there is none", async () => {
+    const d = await deps({
+      client: undefined,
+      apiKeyUnresolved: true,
+      source: "disk",
+    });
+    const result = await issuesHandler(d, {});
+    expect(String(result.note)).toMatch(/could not be resolved/i);
+    expect(String(result.note)).toMatch(/config is fine/i);
+  });
+
+  it("still says 'not configured' when there genuinely is no key", async () => {
+    const d = await deps({ client: undefined });
+    const result = await issuesHandler(d, {});
+    expect(String(result.note)).toMatch(/no hookdeck api key is configured/i);
+  });
+
+  it("distinguishes the two in recent deliveries too", async () => {
+    const unresolved = await deps({
+      client: undefined,
+      apiKeyUnresolved: true,
+      source: "disk",
+    });
+    expect(
+      String((await recentDeliveriesHandler(unresolved, {})).note),
+    ).toMatch(/could not be resolved/i);
+
+    const absent = await deps({ client: undefined });
+    expect(String((await recentDeliveriesHandler(absent, {})).note)).toMatch(
+      /no api key is configured/i,
+    );
+  });
+});

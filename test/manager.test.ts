@@ -135,6 +135,7 @@ describe("provisioning", () => {
       config({ provisioning: { enabled: true, force: true } }),
     );
     await mgr.start();
+    await mgr.stop();
     await mgr.start();
     expect(client.upsertConnection).toHaveBeenCalledTimes(2);
   });
@@ -355,6 +356,7 @@ describe("catch-up", () => {
     );
     await mgr.start();
     await cursors.patch("stripe", { lastDisconnectAt: 1_000 });
+    await mgr.stop();
     await mgr.start();
 
     expect(client.bulkReplayRequests).toHaveBeenCalledOnce();
@@ -430,6 +432,7 @@ describe("review regressions", () => {
     );
     await mgr.start();
     await cursors.patch("stripe", { lastDisconnectAt: 1_000 });
+    await mgr.stop();
     await mgr.start();
 
     const record = cursors.get("stripe")!;

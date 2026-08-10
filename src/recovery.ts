@@ -76,11 +76,10 @@ export async function reconcileOrphans(
   const ordered = [...orphans].sort((a, b) => a.updatedAt - b.updatedAt);
 
   for (const [index, row] of ordered.entries()) {
-    // Settle the row first, whatever happens next. Leaving it `running` would
-    // make the next boot treat it as an orphan again, forever.
-    await ledger.settle(row.eventId, "failed");
-
     if (index >= maxEvents || client === undefined) {
+      // Recorded before the row is settled: a crash between the two would
+      // otherwise leave a terminal row, no orphan for the next boot, and
+      // nothing anywhere saying the event was dropped.
       summary.skipped += 1;
       await deadLetter.record({
         eventId: row.eventId,
@@ -94,11 +93,16 @@ export async function reconcileOrphans(
         lastAttempt: false,
         attemptCount: row.attempt,
       });
+      await ledger.settle(row.eventId, "failed");
       continue;
     }
 
     const result = await client.retryEvent(row.eventId);
     if (result.ok) {
+      // Settled only once Hookdeck has accepted the redelivery. The other order
+      // loses the event entirely if the process dies between the two: a
+      // terminal row, no orphan, no Issue and no dead-letter record.
+      await ledger.settle(row.eventId, "failed");
       summary.retried += 1;
       logger.debug(`re-queued interrupted event ${row.eventId}`);
       continue;

@@ -3,7 +3,7 @@ import type {
   HookdeckPluginConfig,
   RouteConfig,
 } from "../plugin/config-types.js";
-import { decideAdmission } from "../protocol/admission.js";
+import { decideAdmission, plausibleAttempt } from "../protocol/admission.js";
 import {
   parseHookdeckDelivery,
   type HookdeckDelivery,
@@ -392,7 +392,11 @@ async function runPipeline(
 
     // 13. Dispatch, bracketed by ledger writes. `begin` is awaited: it is the
     //     boundary before which we must not acknowledge anything.
-    await deps.ledger.begin(eventId, delivery.attemptCount ?? 1, { routeId });
+    await deps.ledger.begin(
+      eventId,
+      plausibleAttempt(delivery.attemptCount) ?? 1,
+      { routeId },
+    );
 
     let outcome: DispatchOutcome;
     try {

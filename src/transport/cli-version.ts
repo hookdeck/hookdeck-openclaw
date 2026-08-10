@@ -37,7 +37,39 @@ export function compareVersions(a: ParsedVersion, b: ParsedVersion): number {
   if (a.prerelease === b.prerelease) return 0;
   if (a.prerelease === undefined) return 1;
   if (b.prerelease === undefined) return -1;
-  return a.prerelease < b.prerelease ? -1 : 1;
+  return comparePrerelease(a.prerelease, b.prerelease);
+}
+
+/**
+ * Compares prerelease identifiers the way semver does: dot-separated, numeric
+ * parts numerically and everything else as text.
+ *
+ * A plain string compare puts `beta.10` below `beta.9`, which is exactly the
+ * range where a version gate has to be right.
+ */
+function comparePrerelease(a: string, b: string): number {
+  const left = a.split(".");
+  const right = b.split(".");
+
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const x = left[i];
+    const y = right[i];
+    // A shorter identifier list sorts lower: `beta` < `beta.1`.
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+
+    const xNumeric = /^\d+$/.test(x);
+    const yNumeric = /^\d+$/.test(y);
+    if (xNumeric && yNumeric) {
+      if (Number(x) !== Number(y)) return Number(x) - Number(y);
+      continue;
+    }
+    // Numeric identifiers always sort below alphanumeric ones.
+    if (xNumeric !== yNumeric) return xNumeric ? -1 : 1;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+
+  return 0;
 }
 
 export interface VersionCheck {

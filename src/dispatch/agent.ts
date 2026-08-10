@@ -196,8 +196,13 @@ export function createAgentDispatcher(
       }
 
       if (activeRuns >= options.maxConcurrentRuns) {
+        // `settle: "failed"`, not `"deferred"`. The handler has already written
+        // the ledger row by the time dispatch runs, and `deferred` means "a
+        // background run owns this row and will settle it" — but no run
+        // started, so the row would stay `running` forever, invisible to
+        // in-process recovery. The response is still a plain retryable defer.
         return {
-          settle: "deferred",
+          settle: "failed",
           plan: deferFor(
             503,
             "busy",

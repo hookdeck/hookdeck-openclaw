@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { jsonResult } from "openclaw/plugin-sdk/core";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 import { parseHookdeckConfig } from "./src/plugin/config-parse.js";
@@ -95,8 +96,18 @@ export default definePluginEntry({
           `config error at ${problem.path}: ${problem.message}`,
         );
       }
+      // The configured basePath, not the default: a deployment that moved the
+      // ingress would otherwise answer 404 on its real path during a config
+      // error, and the events would be lost rather than held.
+      const basePath =
+        typeof (api.pluginConfig as { ingress?: { basePath?: unknown } })
+          ?.ingress?.basePath === "string"
+          ? ((api.pluginConfig as { ingress: { basePath: string } }).ingress
+              .basePath satisfies string)
+          : "/hookdeck";
+
       api.registerHttpRoute({
-        path: "/hookdeck",
+        path: basePath.startsWith("/") ? basePath : `/${basePath}`,
         auth: "plugin",
         match: "prefix",
         replaceExisting: true,
@@ -114,6 +125,39 @@ export default definePluginEntry({
           return true;
         },
       });
+
+      // A config error is exactly when someone asks "are webhooks working?".
+      // Registering nothing leaves the agent with no way to answer, so the one
+      // tool that can explain the situation is registered even here.
+      try {
+        api.registerTool(
+          {
+            name: "hookdeck_status",
+            label: "Hookdeck Status",
+            description:
+              "Reports the Hookdeck plugin's state. Start here. The plugin is currently misconfigured, " +
+              "so this returns the configuration errors that need fixing.",
+            parameters: { type: "object", properties: {} },
+            execute: async () =>
+              jsonResult({
+                ok: false,
+                code: "config_error",
+                note:
+                  "The Hookdeck plugin could not start: its configuration is invalid. Ingress answers " +
+                  "503 with a Retry-After, so events are held in Hookdeck rather than lost until this " +
+                  "is fixed.",
+                problems: parsed.problems,
+              }),
+          } as never,
+          { name: "hookdeck_status" },
+        );
+      } catch (err) {
+        api.logger?.warn?.(
+          `could not register hookdeck_status during a config error: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
       return;
     }
 
@@ -232,11 +276,20 @@ export default definePluginEntry({
           const disk = await openDiskState({
             ttlHours: config.dedupe.ttlHours,
           });
+          // The host's secret runtime needs the live OpenClawConfig, which
+          // only the service start receives — and that has not run in this
+          // process. So a secretRef resolves to nothing here even though the
+          // key is configured perfectly well, and the difference has to be
+          // reported as "unavailable", not "absent": one is a deployment fault
+          // to go and fix, the other is normal.
           const apiKey = await resolveSecret(
             config.apiKey,
             "apiKey",
             hostSecrets,
           ).catch(() => undefined);
+          const keyConfiguredButUnresolvable =
+            apiKey === undefined && config.apiKey !== undefined;
+
           return {
             config,
             source: "disk",
@@ -244,6 +297,7 @@ export default definePluginEntry({
             deadLetter: disk.deadLetter,
             cursors: disk.cursors,
             logger: log,
+            ...(keyConfiguredButUnresolvable ? { apiKeyUnresolved: true } : {}),
             ...(apiKey !== undefined
               ? { client: createHookdeckClient({ apiKey }) }
               : {}),

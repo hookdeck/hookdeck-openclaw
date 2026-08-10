@@ -163,12 +163,17 @@ export function createCliListener(
     child = handle;
 
     readinessTimer = setTimer(() => {
-      if (state === "starting") {
-        deps.logger.warn(
-          `[${options.routeId}] no connection banner within the readiness timeout; restarting`,
-        );
-        handle.kill("SIGTERM");
-      }
+      if (state !== "starting") return;
+      deps.logger.warn(
+        `[${options.routeId}] no connection banner within the readiness timeout; restarting`,
+      );
+      handle.kill("SIGTERM");
+      // Escalated, as `stop()` does. A child that ignores SIGTERM would
+      // otherwise sit there un-restarted with the supervisor waiting on an
+      // exit that never comes.
+      setTimer(() => {
+        if (child === handle) handle.kill("SIGKILL");
+      }, options.terminateGraceMs ?? 5_000);
     }, options.readinessTimeoutMs ?? 20_000);
 
     handle.onLine((raw) => {
