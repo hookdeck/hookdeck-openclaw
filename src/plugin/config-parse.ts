@@ -72,6 +72,7 @@ const configSchema = z.object({
   headerPrefix: z.string().min(1).default(DEFAULT_HEADER_PREFIX),
   signingSecret: secretInputSchema.optional(),
   apiKey: secretInputSchema.optional(),
+  tools: z.object({ allowMutations: z.boolean().default(true) }).default({ allowMutations: true }),
   storage: z
     .object({
       enabled: z.boolean().default(true),
@@ -295,6 +296,7 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     busyRetryAfterSeconds: value.busyRetryAfterSeconds,
     deferAttemptLimit: value.deferAttemptLimit,
     dedupe: { ttlHours: value.dedupe.ttlHours },
+    tools: { allowMutations: value.tools.allowMutations },
     storage: {
       enabled: value.storage.enabled,
       deadLetterMaxEntries: value.storage.deadLetterMaxEntries,

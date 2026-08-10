@@ -28,6 +28,10 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
     pauseConnection: vi.fn(async () => ({ ok: true as const, data: { id: "web_1" } })),
     unpauseConnection: vi.fn(async () => ({ ok: true as const, data: { id: "web_1" } })),
     bulkReplayRequests: vi.fn(async () => ({ ok: true as const, data: { id: "bulk_1" } })),
+    listEvents: vi.fn(async () => ({ ok: true as const, data: [] })),
+    getEvent: vi.fn(async () => ({ ok: true as const, data: { id: "evt_1" } })),
+    getEventBody: vi.fn(async () => ({ ok: true as const, data: {} })),
+    listIssues: vi.fn(async () => ({ ok: true as const, data: [] })),
     ...overrides,
   };
 }

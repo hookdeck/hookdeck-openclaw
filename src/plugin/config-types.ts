@@ -199,6 +199,10 @@ export interface HookdeckPluginConfig {
   dedupe: {
     ttlHours: number;
   };
+  tools: {
+    /** With mutations off, the agent can diagnose but not act. */
+    allowMutations: boolean;
+  };
   storage: StorageConfig;
   recovery: RecoveryConfig;
   transport: TransportConfig;

@@ -31,6 +31,25 @@ export interface HookdeckConnection {
   rules?: { type: string; response_status_codes?: string[] }[];
 }
 
+export interface HookdeckEvent {
+  id: string;
+  status?: string;
+  response_status?: number | null;
+  attempts?: number;
+  created_at?: string;
+  successful_at?: string | null;
+  event_data_id?: string;
+}
+
+export interface HookdeckIssue {
+  id: string;
+  status?: string;
+  issue_type?: string;
+  first_seen_at?: string;
+  last_seen_at?: string;
+  aggregation_keys?: Record<string, unknown>;
+}
+
 export interface HookdeckClient {
   /**
    * Manually retry an event.
@@ -63,6 +82,19 @@ export interface HookdeckClient {
    * no project-wide `GET /ignored-events`, so replay is the only path that can
    * be scoped to an outage window.
    */
+  listEvents(params?: {
+    limit?: number;
+    status?: string;
+    webhookId?: string;
+  }): Promise<ApiResult<HookdeckEvent[]>>;
+
+  getEvent(id: string): Promise<ApiResult<HookdeckEvent>>;
+
+  /** Raw delivered body, fetched separately from the event record. */
+  getEventBody(id: string): Promise<ApiResult<unknown>>;
+
+  listIssues(params?: { status?: string; limit?: number }): Promise<ApiResult<HookdeckIssue[]>>;
+
   bulkReplayRequests(params: {
     query: Record<string, unknown>;
     target: { webhook_ids?: string[]; source_id?: string };
@@ -147,6 +179,31 @@ export function createHookdeckClient(options: HookdeckClientOptions): HookdeckCl
 
     async unpauseConnection(id) {
       return request<HookdeckConnection>("PUT", `/connections/${encodeURIComponent(id)}/unpause`);
+    },
+
+    async listEvents(params = {}) {
+      const query = new URLSearchParams();
+      query.set("limit", String(params.limit ?? 20));
+      if (params.status !== undefined) query.set("status", params.status);
+      if (params.webhookId !== undefined) query.set("webhook_id", params.webhookId);
+      const result = await request<{ models?: HookdeckEvent[] }>("GET", `/events?${query}`);
+      return result.ok ? { ok: true, data: result.data.models ?? [] } : result;
+    },
+
+    async getEvent(id) {
+      return request<HookdeckEvent>("GET", `/events/${encodeURIComponent(id)}`);
+    },
+
+    async getEventBody(id) {
+      return request<unknown>("GET", `/events/${encodeURIComponent(id)}/raw_body`);
+    },
+
+    async listIssues(params = {}) {
+      const query = new URLSearchParams();
+      query.set("limit", String(params.limit ?? 20));
+      if (params.status !== undefined) query.set("status", params.status);
+      const result = await request<{ models?: HookdeckIssue[] }>("GET", `/issues?${query}`);
+      return result.ok ? { ok: true, data: result.data.models ?? [] } : result;
     },
 
     async bulkReplayRequests(params) {

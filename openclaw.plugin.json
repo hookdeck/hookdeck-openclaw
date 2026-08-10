@@ -5,6 +5,17 @@
   "activation": {
     "onStartup": true
   },
+  "contracts": {
+    "tools": [
+      "hookdeck_status",
+      "hookdeck_recent_deliveries",
+      "hookdeck_inspect_event",
+      "hookdeck_doctor",
+      "hookdeck_setup",
+      "hookdeck_pause",
+      "hookdeck_replay"
+    ]
+  },
   "configContracts": {
     "secretInputs": {
       "paths": [

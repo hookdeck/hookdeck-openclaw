@@ -2,7 +2,7 @@
 
 Reliable webhooks for OpenClaw. Puts the [Hookdeck](https://hookdeck.com) Event Gateway in front of your OpenClaw Gateway so inbound webhooks are verified, deduplicated and retryable.
 
-> **Status: M4.** Signature verification, durable deduplication, crash recovery, dead-lettering, route filters, all three dispatch modes, connection provisioning, CLI supervision, pause-on-shutdown and outage catch-up all work. The agent-facing operator tools are not here yet — see [Limitations](#limitations). Nothing below describes behaviour that isn't implemented.
+> **Status: M5.** Signature verification, durable deduplication, crash recovery, dead-lettering, route filters, all three dispatch modes, connection provisioning, CLI supervision, pause-on-shutdown, outage catch-up and the agent-facing tools all work — see [Limitations](#limitations) for what remains. Nothing below describes behaviour that isn't implemented.
 
 ## Why
 
@@ -249,6 +249,28 @@ Without `apiKey`, orphans are still detected, settled and dead-lettered — they
 
 **It is off by default, and that default is deliberate.** A mistake here discards real traffic, and the events are gone once retention lapses (3 days on the free plan). Cancellation is only ever emitted from a closed allowlist of reasons, always dead-letters first, and never fires for anything a config change could fix — a missing secret, an unresolvable secretRef or a storage failure all stay retryable. Turn it on once you have watched the logs and seen what it *would* have cancelled.
 
+## Agent tools
+
+Seven tools, matching the shared contract's five operator verbs plus two read tools an agent host benefits from more than a CLI does.
+
+| Tool | Answers |
+|---|---|
+| `hookdeck_status` | "Are webhooks working?" — routes, capacity, ledger persistence, dead-letter count, open issues, transport state, config warnings |
+| `hookdeck_recent_deliveries` | "Did anything break overnight?" — dead-letters joined with ledger state |
+| `hookdeck_inspect_event` | "Why did *this* one fail?" — our row and reason beside Hookdeck's status |
+| `hookdeck_doctor` | What's misconfigured, including whether each connection's retry rule still covers every status we emit |
+| `hookdeck_setup` | Provisions connections. Dry run by default |
+| `hookdeck_pause` | Pause/resume a connection. Auto-resumes within an hour |
+| `hookdeck_replay` | Retry specific events, or a scoped bulk replay. Dry run unless `confirm: true` |
+
+`tools.allowMutations: false` reduces this to the four read tools, for an agent that can diagnose but not act.
+
+Three safety rails are deliberate. **`hookdeck_setup` defaults to a dry run**, so an agent has to mean it. **`hookdeck_replay` refuses a filtered replay without `confirm: true`**, because an unscoped retry-everything costs real money. And **`hookdeck_pause` always schedules an auto-resume**, clamped to an hour, because an agent that pauses and then loses the thread must not stop the pipeline indefinitely.
+
+Deliberately absent: `disable`, any delete, raw source/destination CRUD, transformation overwrite. Their failure mode is irrecoverable event loss and an agent cannot judge the blast radius.
+
+> Registering tools requires `contracts.tools` in the plugin manifest, listing every tool name. Without it the host logs `plugin must declare contracts.tools` and silently registers nothing — it does not throw, so a plugin can look healthy while having no tool surface at all.
+
 ## Trust boundary
 
 **A valid signature authenticates the sender, not the content.** Webhook payload text is third-party input that ends up in a prompt reaching a model with tools.
@@ -264,7 +286,6 @@ Signature headers and resolved secrets are redacted from logs.
 Not yet implemented:
 
 - **No completion tracking for agent turns.** See [Agent turns](#agent-turns) — `sync` and `maxAgentRetries` need a completion hook the TaskFlow transport does not provide.
-- **No agent-facing operator tools yet** (`setup`, `status`, `pause`/`resume`, `replay`, `doctor`). The behaviour behind them exists; the tool surface does not.
 
 ## Development
 
@@ -274,7 +295,7 @@ npm test
 npm run typecheck
 ```
 
-370 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+402 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 

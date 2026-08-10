@@ -16,6 +16,8 @@ import { createHookdeckClient, type HookdeckClient } from "./src/hookdeck/client
 import { handleDelivery, writePlan, type Logger } from "./src/ingress/handler.js";
 import { deferFor, retryable } from "./src/protocol/outcome.js";
 import { reconcileOrphans } from "./src/recovery.js";
+import { registerHookdeckTools } from "./src/tools/index.js";
+import type { ToolDeps } from "./src/tools/handlers.js";
 import { createDeadLetterLog, type DeadLetterLog } from "./src/store/deadletter.js";
 import { createInFlightRegistry, type InFlightRegistry } from "./src/store/in-flight.js";
 import { createLedger, type Ledger } from "./src/store/ledger.js";
@@ -151,6 +153,32 @@ export default definePluginEntry({
       dispatchers.set(routeId, dispatcher);
       return dispatcher;
     };
+
+    // Registered up front so the surface exists from the first turn; each tool
+    // reports "not started yet" rather than throwing if it is called early.
+    registerHookdeckTools(api, {
+      allowMutations: config.tools.allowMutations,
+      deps: (): ToolDeps | undefined => {
+        const active = runtime;
+        if (active === undefined) return undefined;
+        return {
+          config,
+          ledger: active.ledger,
+          deadLetter: active.deadLetter,
+          cursors: active.cursors,
+          inFlight: active.inFlight,
+          logger: log,
+          client: active.client,
+          transportStatus: () => active.transport.status(),
+          retryCancels: () => Object.fromEntries(retryCancels),
+          configWarnings: () => parsed.warnings,
+        };
+      },
+      schedule: (fn, ms) => {
+        const timer = setTimeout(fn, ms);
+        timer.unref?.();
+      },
+    });
 
     const respondStarting = (res: Parameters<typeof writePlan>[0]) =>
       writePlan(
