@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { createHookdeckClient } from "../../src/hookdeck/client.js";
+import { sweepCiResources } from "./cleanup.js";
 import {
   buildConnectionSpec,
   uncoveredStatuses,
@@ -18,7 +19,9 @@ import {
  * `auth_type`, and `path_forwarding_disabled` defaulting to false. Both fail on
  * the first real call or not at all.
  *
- * Creates resources named `openclaw-ci-<runId>-*` and deletes only that prefix.
+ * Creates resources named `openclaw-ci-*` and, in teardown, deletes everything
+ * with that prefix — including leftovers from runs that never reached their own
+ * teardown. Nothing outside the prefix is ever touched.
  */
 
 function readKey(): string | undefined {
@@ -59,10 +62,25 @@ run("live Hookdeck API", () => {
   });
 
   afterAll(async () => {
-    // Best effort: a leaked test connection is noise, not damage. Never
-    // `disable` or delete anything outside our prefix.
-    for (const id of created) {
-      await client.pauseConnection(id).catch(() => {});
+    // This used to only PAUSE what it created, while the file comment claimed
+    // it deleted. Paused connections are not cleaned up by anything, so every
+    // run left a connection, a source and a destination behind; 37 of each had
+    // accumulated in a real project before it was spotted.
+    //
+    // The rule that produced that mistake — "never disable or delete" — is a
+    // rule about an OPERATOR's connections, where deleting cancels pending
+    // events. It does not apply to throwaway objects this suite just made.
+    //
+    // Sweeps by prefix rather than by this run's ids, so a run that crashes or
+    // is interrupted before teardown gets cleaned up by the next one.
+    const swept = await sweepCiResources(apiKey!).catch((err) => {
+      console.warn(`[live] cleanup failed: ${String(err)}`);
+      return undefined;
+    });
+    if (swept && swept.failures.length > 0) {
+      console.warn(
+        `[live] cleanup left ${swept.failures.length} object(s): ${swept.failures.join("; ")}`,
+      );
     }
   });
 
@@ -174,7 +192,10 @@ run("live Hookdeck API — issues and attempts, read-only", () => {
   });
 
   it("accepts the type filter", async () => {
-    const result = await client.listIssues({ status: "OPENED", type: "delivery" });
+    const result = await client.listIssues({
+      status: "OPENED",
+      type: "delivery",
+    });
     expect(result.ok).toBe(true);
   });
 

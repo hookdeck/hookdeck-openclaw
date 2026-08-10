@@ -125,11 +125,20 @@ export function createCliListener(
   let readinessTimer: { cancel(): void } | undefined;
   let restartTimer: { cancel(): void } | undefined;
 
+  /**
+   * Scrubs a line of child output once, at the boundary.
+   *
+   * Every consumer takes it from here: the ring buffer `hookdeck_status`
+   * exposes, the debug log, and the readiness match. Scrubbing inside `record`
+   * alone left the debug log printing the raw line — a value removed in one
+   * place and not the other has not really been removed.
+   */
+  function sanitise(line: string): string {
+    return scrubSecrets(line, [options.apiKey]);
+  }
+
   function record(line: string): void {
-    // Scrubbed at capture, not at read: the ring is surfaced by
-    // `hookdeck_status` and also logged, and a value removed in one place and
-    // not the other has not really been removed.
-    ring.push(scrubSecrets(line, [options.apiKey]));
+    ring.push(sanitise(line));
     if (ring.length > RING_SIZE) ring.shift();
   }
 
@@ -167,7 +176,8 @@ export function createCliListener(
       }
     }, options.readinessTimeoutMs ?? 20_000);
 
-    handle.onLine((line) => {
+    handle.onLine((raw) => {
+      const line = sanitise(raw);
       record(line);
       deps.logger.debug(`[${options.routeId}] ${line}`);
       if (state === "starting" && readiness.test(line)) {

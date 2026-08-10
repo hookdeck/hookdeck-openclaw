@@ -38,18 +38,17 @@ export const READ_TOOL_NAMES = [
   "hookdeck_recent_deliveries",
   "hookdeck_inspect_event",
   "hookdeck_doctor",
+  // Registered even when mutations are off, because its `list` and `get`
+  // actions are pure reads and they are the view of the dead-letter queue.
+  // The handler refuses acknowledge/resolve/ignore/dismiss in that mode and
+  // says why, rather than the tool vanishing and taking the listing with it.
+  "hookdeck_issues",
 ] as const;
 
 export const MUTATION_TOOL_NAMES = [
   "hookdeck_setup",
   "hookdeck_pause",
   "hookdeck_replay",
-  // Mutating because acknowledge/resolve/dismiss change what the whole project
-  // sees. `action: "list"` is read-only, but a tool is registered or not, and
-  // splitting one verb across both surfaces would be worse than losing the
-  // listing when mutations are off — `hookdeck_recent_deliveries` still shows
-  // open issues.
-  "hookdeck_issues",
 ] as const;
 
 export const ALL_TOOL_NAMES = [
@@ -171,6 +170,36 @@ export function registerHookdeckTools(
       parameters: Type.Object({}),
       execute: wrap((deps) => doctorHandler(deps)),
     },
+    {
+      name: "hookdeck_issues",
+      label: "Hookdeck Issues",
+      description:
+        "Hookdeck Issues ARE the dead-letter queue — this is where events that have been given up " +
+        "on are recorded, and where they are acknowledged and resolved. action 'list' (default) shows " +
+        "open issues; 'get' details one; 'acknowledge' says someone is on it; 'resolve' says the " +
+        "underlying problem is fixed; 'ignore' silences it; 'dismiss' removes the record entirely and " +
+        "needs confirm. None of these replay anything — use hookdeck_replay for that.",
+      parameters: Type.Object({
+        action: Type.Optional(
+          Type.Union([
+            Type.Literal("list"),
+            Type.Literal("get"),
+            Type.Literal("acknowledge"),
+            Type.Literal("resolve"),
+            Type.Literal("ignore"),
+            Type.Literal("dismiss"),
+          ]),
+        ),
+        issueId: Type.Optional(Type.String()),
+        status: Type.Optional(Type.String()),
+        type: Type.Optional(Type.String()),
+        limit: Type.Optional(Type.Number()),
+        confirm: Type.Optional(Type.Boolean()),
+      }),
+      execute: wrap((deps, params: Parameters<typeof issuesHandler>[1]) =>
+        issuesHandler(deps, params, options.allowMutations),
+      ),
+    },
   ];
 
   if (options.allowMutations) {
@@ -224,34 +253,6 @@ export function registerHookdeckTools(
           confirm: Type.Optional(Type.Boolean()),
         }),
         execute: wrap(replayHandler),
-      },
-      {
-        name: "hookdeck_issues",
-        label: "Hookdeck Issues",
-        description:
-          "Hookdeck Issues ARE the dead-letter queue — this is where events that have been given up " +
-          "on are recorded, and where they are acknowledged and resolved. action 'list' (default) shows " +
-          "open issues; 'get' details one; 'acknowledge' says someone is on it; 'resolve' says the " +
-          "underlying problem is fixed; 'ignore' silences it; 'dismiss' removes the record entirely and " +
-          "needs confirm. None of these replay anything — use hookdeck_replay for that.",
-        parameters: Type.Object({
-          action: Type.Optional(
-            Type.Union([
-              Type.Literal("list"),
-              Type.Literal("get"),
-              Type.Literal("acknowledge"),
-              Type.Literal("resolve"),
-              Type.Literal("ignore"),
-              Type.Literal("dismiss"),
-            ]),
-          ),
-          issueId: Type.Optional(Type.String()),
-          status: Type.Optional(Type.String()),
-          type: Type.Optional(Type.String()),
-          limit: Type.Optional(Type.Number()),
-          confirm: Type.Optional(Type.Boolean()),
-        }),
-        execute: wrap(issuesHandler),
       },
     );
   }

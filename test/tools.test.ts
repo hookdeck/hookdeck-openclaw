@@ -55,9 +55,23 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
     listEvents: vi.fn(async () => ({ ok: true as const, data: [] })),
     getEvent: vi.fn(async () => ({
       ok: true as const,
-      data: { id: "evt_1", status: "FAILED", attempts: 3 },
+      // Shaped like the real API: headers hang off `data`, not off the event.
+      data: {
+        id: "evt_1",
+        status: "FAILED",
+        attempts: 3,
+        data: {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+        },
+      },
     })),
-    getEventBody: vi.fn(async () => ({ ok: true as const, data: {} })),
+    // `GET /events/{id}/raw_body` answers {"body": "<text>"}; the client
+    // unwraps it, so the fake returns what the client returns: the payload.
+    getEventBody: vi.fn(async () => ({
+      ok: true as const,
+      data: '{"type":"invoice.paid"}',
+    })),
     listIssues: vi.fn(async () => ({
       ok: true as const,
       data: [{ id: "iss_1", type: "delivery", status: "OPENED" }],
@@ -188,8 +202,18 @@ describe("hookdeck_recent_deliveries", () => {
   it("leads with Hookdeck Issues, which are the actual dead-letter queue", async () => {
     const d = await deps();
     const result = await recentDeliveriesHandler(d, {});
+    // The type must survive: "a delivery issue" and "a transformation issue"
+    // send you to different places. This read `issue_type`, which the API does
+    // not send, so every issue arrived as type null.
     expect(result.openIssues).toEqual([
-      { id: "iss_1", type: null, firstSeen: null, lastSeen: null },
+      {
+        id: "iss_1",
+        type: "delivery",
+        status: "OPENED",
+        firstSeen: null,
+        lastSeen: null,
+        keys: null,
+      },
     ]);
     expect(d.client!.listIssues).toHaveBeenCalledWith(
       expect.objectContaining({ status: "OPENED" }),
@@ -935,11 +959,17 @@ describe("redaction — what reaches the model", () => {
           ok: true as const,
           data: {
             id: "evt_1",
-            headers: {
-              "x-hookdeck-signature": "aVeryLongSignatureValueHere==",
-              authorization: "Bearer provider_token_value",
-              "stripe-signature": "t=1,v1=deadbeefdeadbeef",
-              "content-type": "application/json",
+            // Headers live under `data`, NOT on the event. Reading
+            // `event.headers` returned undefined and every inspected event
+            // reported having no headers at all.
+            data: {
+              method: "POST",
+              headers: {
+                "x-hookdeck-signature": "aVeryLongSignatureValueHere==",
+                authorization: "Bearer provider_token_value",
+                "stripe-signature": "t=1,v1=deadbeefdeadbeef",
+                "content-type": "application/json",
+              },
             },
           },
         })),
@@ -990,5 +1020,118 @@ describe("redaction — what reaches the model", () => {
 
     expect(result.body!.length).toBe(4000);
     expect(result.bodyTruncated).toBe(20_000);
+  });
+});
+
+describe("event shapes we got wrong once", () => {
+  it("reads headers from event.data, where the API actually puts them", async () => {
+    // `Event` has no `headers` property in the 2025-07-01 schema — it has
+    // `data`. Reading `event.headers` yielded undefined, and an empty object
+    // was reported as the event's headers. A fake built to match the
+    // assumption rather than the API hid it.
+    const d = await deps();
+    const result = await inspectEventHandler(d, { eventId: "evt_1" });
+    expect(result.hookdeck?.headers).not.toBeNull();
+    expect(result.hookdeck?.headers?.["content-type"]).toBe("application/json");
+    expect(result.hookdeck?.method).toBe("POST");
+  });
+
+  it("distinguishes 'no headers' from 'we looked in the wrong place'", async () => {
+    const d = await deps({
+      client: fakeClient({
+        getEvent: vi.fn(async () => ({
+          ok: true as const,
+          data: { id: "evt_1" },
+        })),
+      }),
+    });
+    const result = await inspectEventHandler(d, { eventId: "evt_1" });
+    expect(result.hookdeck?.headers).toBeNull();
+  });
+
+  it("parses headers that arrive as a JSON string", async () => {
+    // The schema types this anyOf [string, object].
+    const d = await deps({
+      client: fakeClient({
+        getEvent: vi.fn(async () => ({
+          ok: true as const,
+          data: {
+            id: "evt_1",
+            data: {
+              headers:
+                '{"content-type":"application/json","authorization":"Bearer abcdef123"}',
+            },
+          },
+        })),
+      }),
+    });
+    const result = await inspectEventHandler(d, { eventId: "evt_1" });
+    expect(result.hookdeck?.headers?.["content-type"]).toBe("application/json");
+    expect(result.hookdeck?.headers?.authorization).not.toContain("abcdef123");
+  });
+
+  it("returns the payload itself, not Hookdeck's {body: …} envelope", async () => {
+    const d = await deps();
+    const result = (await inspectEventHandler(d, {
+      eventId: "evt_1",
+      includeBody: true,
+    })) as { body?: string };
+    expect(result.body).toBe('{"type":"invoice.paid"}');
+  });
+});
+
+describe("hookdeck_issues under allowMutations: false", () => {
+  it("still lists, because seeing the dead-letter queue is diagnosis", async () => {
+    const result = await issuesHandler(await deps(), {}, false);
+    expect(result.ok).toBe(true);
+    expect(result.issues).toHaveLength(1);
+  });
+
+  it("still inspects one issue", async () => {
+    const result = await issuesHandler(
+      await deps(),
+      { action: "get", issueId: "iss_1" },
+      false,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("refuses the mutating actions and says why", async () => {
+    for (const action of [
+      "acknowledge",
+      "resolve",
+      "ignore",
+      "dismiss",
+    ] as const) {
+      const d = await deps();
+      const result = await issuesHandler(
+        d,
+        { action, issueId: "iss_1", confirm: true },
+        false,
+      );
+      expect(result.ok, action).toBe(false);
+      expect(String(result.note)).toMatch(/allowMutations/);
+      expect(d.client!.updateIssue).not.toHaveBeenCalled();
+      expect(d.client!.dismissIssue).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("issue counts stay honest under a type filter", () => {
+  it("omits the project-wide total rather than reporting a mismatched one", async () => {
+    // The count endpoint takes no type filter, so counting while listing a
+    // filtered subset would read as "3 of 12 shown" when the twelve include
+    // types the caller excluded.
+    const d = await deps();
+    const result = await issuesHandler(d, { type: "delivery" });
+    expect(result.total).toBeUndefined();
+    expect(String(result.totalNote)).toMatch(/no type\s+filter|takes no type/i);
+    expect(d.client!.countIssues).not.toHaveBeenCalled();
+  });
+
+  it("reports the real total when nothing is filtered out", async () => {
+    const d = await deps();
+    const result = await issuesHandler(d, {});
+    expect(result.total).toBe(1);
   });
 });

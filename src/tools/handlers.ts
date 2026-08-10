@@ -220,14 +220,12 @@ export async function recentDeliveriesHandler(
   // Hookdeck's Issues ARE the dead-letter queue: a delivery issue with
   // strategy `final_attempt` means exactly "this event is not coming back",
   // with notifications and an acknowledge/resolve lifecycle attached.
-  let issues:
-    | {
-        id: string;
-        type: string | null;
-        firstSeen: string | null;
-        lastSeen: string | null;
-      }[]
-    | null = null;
+  // Summarised by the same function `hookdeck_issues` uses. This had its own
+  // copy, which read `issue_type` — the API field is `type` — so the primary
+  // triage tool reported every open issue as type `null`, unable to say whether
+  // a delivery, a transformation or backpressure had failed. One mapping, one
+  // place to be wrong.
+  let issues: ReturnType<typeof summariseIssue>[] | null = null;
   let issuesNote: string | undefined;
   if (deps.client !== undefined) {
     const result = await deps.client.listIssues({
@@ -235,12 +233,7 @@ export async function recentDeliveriesHandler(
       limit: limit,
     });
     if (result.ok) {
-      issues = result.data.map((i) => ({
-        id: i.id,
-        type: i.issue_type ?? null,
-        firstSeen: i.first_seen_at ?? null,
-        lastSeen: i.last_seen_at ?? null,
-      }));
+      issues = result.data.map(summariseIssue);
     } else {
       issuesNote = `Could not read Hookdeck Issues: ${result.message}`;
     }
@@ -293,10 +286,31 @@ const SENSITIVE_HEADER =
   /signature|authorization|api[-_]?key|token|secret|cookie/i;
 
 function redactHeaders(
-  headers: Record<string, unknown> | undefined,
-): Record<string, string> {
+  headers: string | Record<string, unknown> | null | undefined,
+): Record<string, string> | null {
+  // The 2025-07-01 schema types this `anyOf [string, object]`: it can arrive
+  // as a JSON string rather than an object.
+  let source: unknown = headers;
+  if (typeof source === "string") {
+    try {
+      source = JSON.parse(source);
+    } catch {
+      // Unparseable is not the same as absent, and it is not something to
+      // pass through unredacted either.
+      return { _unparsed: "(headers could not be parsed)" };
+    }
+  }
+
+  // Distinguish "no headers on this event" from "we did not look in the right
+  // place". An empty object reads as the first and hid a real bug: this used
+  // to read `event.headers`, which does not exist — headers live on
+  // `event.data` — so every inspected event reported having none.
+  if (source === null || typeof source !== "object") return null;
+
   const out: Record<string, string> = {};
-  for (const [name, value] of Object.entries(headers ?? {})) {
+  for (const [name, value] of Object.entries(
+    source as Record<string, unknown>,
+  )) {
     const text = Array.isArray(value) ? value.join(", ") : String(value ?? "");
     out[name] = SENSITIVE_HEADER.test(name) ? redact(text) : text;
   }
@@ -324,8 +338,9 @@ async function inspectBody(
     return { body: null, bodyNote: `Body unavailable: ${body.message}` };
   }
 
-  const text =
-    typeof body.data === "string" ? body.data : JSON.stringify(body.data);
+  // Already the payload as text: the client unwraps `{"body": …}` for us, so
+  // this is the bytes the provider sent rather than a JSON envelope round it.
+  const text = body.data;
   const truncated = text.length > MAX_BODY_CHARS;
 
   return {
@@ -392,7 +407,8 @@ export async function inspectEventHandler(
       ...(attempts.ok
         ? {}
         : { attemptsNote: `Attempt history unavailable: ${attempts.message}` }),
-      headers: redactHeaders(event.data.headers),
+      method: event.data.data?.method ?? null,
+      headers: redactHeaders(event.data.data?.headers),
     },
     ...(params.includeBody === true
       ? await inspectBody(client, params.eventId)
@@ -595,6 +611,7 @@ export interface IssuesResult {
   total?: number | null;
   shown?: number;
   issues?: ReturnType<typeof summariseIssue>[];
+  totalNote?: string;
   /** get */
   issue?: ReturnType<typeof summariseIssue>;
   reference?: Record<string, unknown> | null;
@@ -614,15 +631,34 @@ export async function issuesHandler(
     limit?: number;
     confirm?: boolean;
   },
+  /**
+   * When mutations are off the agent can still SEE the dead-letter queue.
+   *
+   * The tool was originally left out entirely under `allowMutations: false`,
+   * which took the listing with it. "Diagnose but not act" has to include
+   * being able to look at what has been given up on — otherwise the setting
+   * removes a diagnosis, not a risk.
+   */
+  allowMutations = true,
 ): Promise<IssuesResult> {
   const client = requireClient(deps);
   if (isError(client)) return { ok: false, note: client.error };
 
   const action = params.action ?? "list";
 
+  if (!allowMutations && action !== "list" && action !== "get") {
+    return {
+      ok: false,
+      note:
+        `This deployment sets tools.allowMutations: false, so '${action}' is unavailable. ` +
+        `Listing and inspecting issues still work; changing one needs an operator.`,
+    };
+  }
+
   if (action === "list") {
+    const status = params.status ?? "OPENED";
     const result = await client.listIssues({
-      status: params.status ?? "OPENED",
+      status,
       limit: Math.min(Math.max(params.limit ?? 20, 1), 100),
       ...(params.type !== undefined ? { type: params.type } : {}),
     });
@@ -631,18 +667,36 @@ export async function issuesHandler(
 
     // Counted separately: a list is capped, so its length answers "how many did
     // you show me", not "how many are there".
-    const total = await client.countIssues({
-      status: params.status ?? "OPENED",
-    });
+    //
+    // The count endpoint takes no type filter, so with one applied it counts
+    // MORE than the list describes. Reporting that as `total` beside three
+    // delivery issues would read as "3 of 12 shown" when the twelve include
+    // types the caller filtered out. Omitted rather than approximated.
+    const total =
+      params.type === undefined
+        ? await client.countIssues({ status })
+        : undefined;
 
     return {
       ok: true,
-      status: params.status ?? "OPENED",
-      total: total.ok ? total.data : null,
+      status,
+      ...(total !== undefined ? { total: total.ok ? total.data : null } : {}),
+      ...(params.type !== undefined
+        ? {
+            totalNote:
+              `Filtered to type '${params.type}'. Hookdeck's count endpoint takes no type ` +
+              `filter, so no project-wide total is reported here.`,
+          }
+        : {}),
       shown: result.data.length,
       issues: result.data.map(summariseIssue),
       ...(result.data.length === 0
-        ? { summary: "No open issues: Hookdeck has not given up on anything." }
+        ? {
+            summary:
+              status === "OPENED"
+                ? "No open issues: Hookdeck has not given up on anything."
+                : `No issues with status ${status}.`,
+          }
         : {}),
     };
   }

@@ -290,9 +290,11 @@ describe("hookdeck_issues is actually reachable", () => {
     );
   });
 
-  it("is a mutating tool, so allowMutations: false removes it", () => {
+  it("survives allowMutations: false, because seeing the DLQ is diagnosis", () => {
+    // Dropping the tool took the listing with it, which removes a diagnosis
+    // rather than a risk. The handler refuses the mutating actions instead.
     const { tools } = captureTools({ allowMutations: false });
-    expect(tools.map((t) => t.name)).not.toContain("hookdeck_issues");
+    expect(tools.map((t) => t.name)).toContain("hookdeck_issues");
   });
 
   it("tells the model that clearing an issue is not the same as replaying it", () => {

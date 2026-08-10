@@ -42,8 +42,20 @@ export interface HookdeckEvent {
   created_at?: string;
   successful_at?: string | null;
   event_data_id?: string;
-  /** Request headers as Hookdeck received them; redacted before they escape. */
-  headers?: Record<string, unknown>;
+  /**
+   * The request as Hookdeck received it. Headers live HERE, not on the event —
+   * reading `event.headers` returns undefined and looks like "this event had no
+   * headers", which is worse than an error.
+   *
+   * `headers` is `anyOf [string, object]` in the 2025-07-01 schema: it can
+   * arrive as a JSON string rather than an object.
+   */
+  data?: {
+    method?: string;
+    path?: string | null;
+    query?: string | null;
+    headers?: string | Record<string, unknown> | null;
+  };
 }
 
 export interface HookdeckIssue {
@@ -125,8 +137,14 @@ export interface HookdeckClient {
 
   getEvent(id: string): Promise<ApiResult<HookdeckEvent>>;
 
-  /** Raw delivered body, fetched separately from the event record. */
-  getEventBody(id: string): Promise<ApiResult<unknown>>;
+  /**
+   * Raw delivered body, fetched separately from the event record.
+   *
+   * `GET /events/{id}/raw_body` answers `{"body": "<the payload as text>"}` —
+   * a wrapper, not the payload. Unwrapped here so callers get the bytes the
+   * provider actually sent rather than a JSON envelope around them.
+   */
+  getEventBody(id: string): Promise<ApiResult<string>>;
 
   listIssues(params?: {
     status?: string;
@@ -287,10 +305,16 @@ export function createHookdeckClient(
     },
 
     async getEventBody(id) {
-      return request<unknown>(
+      const result = await request<{ body?: unknown }>(
         "GET",
         `/events/${encodeURIComponent(id)}/raw_body`,
       );
+      if (!result.ok) return result;
+      const body = result.data?.body;
+      return {
+        ok: true,
+        data: typeof body === "string" ? body : JSON.stringify(body ?? null),
+      };
     },
 
     async listIssues(params = {}) {
