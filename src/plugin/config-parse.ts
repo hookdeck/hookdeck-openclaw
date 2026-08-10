@@ -88,6 +88,7 @@ const configSchema = z.object({
     .default({ basePath: "/hookdeck" }),
   maxConcurrent: z.number().int().positive().max(1000).default(4),
   busyRetryAfterSeconds: z.number().int().positive().max(3600).default(10),
+  deferAttemptLimit: z.number().int().positive().max(50).default(5),
   dedupe: z.object({ ttlHours: z.number().positive().max(24 * 30).default(24 * 7) }).default({
     ttlHours: 24 * 7,
   }),
@@ -232,6 +233,7 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     ingress: { basePath },
     maxConcurrent: value.maxConcurrent,
     busyRetryAfterSeconds: value.busyRetryAfterSeconds,
+    deferAttemptLimit: value.deferAttemptLimit,
     dedupe: { ttlHours: value.dedupe.ttlHours },
     storage: {
       enabled: value.storage.enabled,

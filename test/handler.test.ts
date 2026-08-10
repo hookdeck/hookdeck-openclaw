@@ -607,3 +607,36 @@ describe("writePlan", () => {
     expect(res.headers["retry-after"]).toBe("-1");
   });
 });
+
+describe("handleDelivery — deferral backs off once capacity is plainly not recovering", () => {
+  /** The registry is sized from the config, so it must be built with it. */
+  function saturated(overrides: Record<string, unknown> = {}) {
+    const config = buildConfig({ maxConcurrent: 1, ...overrides });
+    const h = harness({ config });
+    h.inFlight.acquire("someone_else");
+    return h;
+  }
+
+  it("sends a short Retry-After while the premise holds", async () => {
+    const { deps, config } = saturated();
+    const result = await handleDelivery(deps, request({ attemptCount: "1" }));
+    expect(result.plan.code).toBe("busy");
+    expect(result.plan.retry).toEqual({ kind: "after", seconds: config.busyRetryAfterSeconds });
+  });
+
+  it("drops the short interval after too many deferrals of the SAME event", async () => {
+    // The attempt counter makes "capacity isn't recovering" observable rather
+    // than guessed. Continuing at a fixed interval would spend the remaining
+    // budget instead of letting exponential backoff stretch it.
+    const { deps } = saturated({ deferAttemptLimit: 3 });
+    const result = await handleDelivery(deps, request({ attemptCount: "9" }));
+    expect(result.plan.code).toBe("busy");
+    expect(result.plan.retry).toEqual({ kind: "none" });
+  });
+
+  it("still records nothing in the ledger for a deferred event", async () => {
+    const { deps, ledger } = saturated({ deferAttemptLimit: 3 });
+    await handleDelivery(deps, request({ attemptCount: "9" }));
+    expect(ledger.get("evt_1")).toBeUndefined();
+  });
+});

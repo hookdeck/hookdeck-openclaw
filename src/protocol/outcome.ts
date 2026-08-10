@@ -72,6 +72,31 @@ export function accepted(code: string, message?: string): ResponsePlan {
 }
 
 /**
+ * Statuses the pipeline may emit expecting Hookdeck to retry.
+ *
+ * This list and the connection's `response_status_codes` rule are two halves of
+ * one contract, and drift between them is silent data loss: we answer 404
+ * expecting a redelivery, the rule does not cover 404, and the event is simply
+ * gone with nothing recording that a choice was made. It is the quieter cousin
+ * of an over-broad retry cancellation — at least a cancellation is auditable.
+ *
+ * Typing `retryable()` and `deferFor()` to this union means emitting an
+ * uncovered status is a compile error rather than a production surprise.
+ *
+ * 400 is here because two of our 400s are recoverable: a missing signature
+ * header (the operator sets the destination's auth to HOOKDECK_SIGNATURE and
+ * retries arrive signed, since Hookdeck signs at delivery time) and a missing
+ * event id (correcting `headerPrefix` makes the retry parse). Malformed JSON is
+ * also a 400 but goes through `cancelRetries`, so it is retired deliberately
+ * rather than by omission.
+ *
+ * 413 is deliberately absent: the body limit is a plugin constant, not operator
+ * config, so no change makes that event succeed.
+ */
+export const RETRYABLE_STATUSES = [400, 401, 404, 408, 409, 429, 500, 502, 503] as const;
+export type RetryableStatus = (typeof RETRYABLE_STATUSES)[number];
+
+/**
  * Ask Hookdeck to come back in `seconds`.
  *
  * Use this ONLY where the condition is expected to clear in seconds — capacity,
@@ -84,7 +109,12 @@ export function accepted(code: string, message?: string): ResponsePlan {
  * failure an operator has to notice and fix, that difference is the difference
  * between recovering the event and losing it.
  */
-export function deferFor(status: number, code: string, seconds: number, message?: string): ResponsePlan {
+export function deferFor(
+  status: RetryableStatus,
+  code: string,
+  seconds: number,
+  message?: string,
+): ResponsePlan {
   return { status, code, retry: { kind: "after", seconds }, message, deadLetter: false };
 }
 
@@ -93,7 +123,7 @@ export function deferFor(status: number, code: string, seconds: number, message?
  * cause might persist, precisely because exponential backoff stretches the
  * attempt budget out far enough for a human to intervene.
  */
-export function retryable(status: number, code: string, message?: string): ResponsePlan {
+export function retryable(status: RetryableStatus, code: string, message?: string): ResponsePlan {
   return { status, code, retry: NO_RETRY, message, deadLetter: false };
 }
 
@@ -137,11 +167,18 @@ export function renderRetryAfterHeader(
   }
 }
 
-/** Status codes we can emit that Hookdeck must be configured to retry. */
-export const RETRYABLE_STATUS_CODES = ["500-599", "429", "408"] as const;
+/**
+ * The connection's `response_status_codes` rule, derived from the statuses we
+ * actually emit so the two cannot drift apart. `doctor` asserts the live rule
+ * still covers this set.
+ */
+export const RETRYABLE_STATUS_CODES: readonly string[] = [
+  ...RETRYABLE_STATUSES.filter((s) => s < 500).map(String),
+  "500-599",
+];
 
 export function isRetryableStatus(status: number): boolean {
-  return status >= 500 || status === 429 || status === 408;
+  return (RETRYABLE_STATUSES as readonly number[]).includes(status) || status >= 500;
 }
 
 export function planToBody(plan: ResponsePlan, extra?: Record<string, unknown>): string {

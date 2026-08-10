@@ -96,6 +96,7 @@ You do not need to configure destination auth either. CLI destinations default t
 | `ingress.basePath` | `/hookdeck` | Gateway route prefix. May not be `/`. |
 | `maxConcurrent` | `4` | Local admission control. In CLI transport this is the **only** limit — CLI destinations carry no `rate_limit` field. |
 | `busyRetryAfterSeconds` | `10` | `Retry-After` sent when deferring at capacity. |
+| `deferAttemptLimit` | `5` | Deferrals of the same event before the short `Retry-After` is dropped and exponential backoff takes over. Capacity that has not recovered after this many attempts is not the transient condition a short interval assumes. |
 | `dedupe.ttlHours` | `168` | Ledger retention. Must exceed Hookdeck's one-week retry ceiling. |
 | `safety.allowRetryCancel` | `false` | See [Retry cancellation](#retry-cancellation). |
 | `routes.<id>.source` | — | **Required.** Hookdeck source name. |
@@ -173,7 +174,9 @@ Two rules govern that table, and both are easy to get backwards.
 
 **`Retry-After` is only sent when the condition clears in seconds.** It overrides the connection's retry rule entirely, so a fixed short value is a budget hazard: at 30s a side, the 50-attempt ceiling is spent in 25 minutes and the event is gone. For anything needing a human — a missing secret, a repeated dispatch failure — the header is omitted so exponential backoff spreads the attempts across up to a week.
 
-**Configure your connection's retry rule to cover `500-599`, `429` and `408`.** A narrower rule turns admission control into silent data loss: the plugin defers with `503` expecting redelivery, and it never comes.
+**Configure your connection's retry rule to cover `400`, `401`, `404`, `408`, `409`, `429` and `500-599`.** A narrower rule is silent data loss, and it is the quiet cousin of an over-broad retry cancellation: the plugin answers `404` expecting a redelivery, the rule does not cover `404`, the event is gone, and nothing records that a choice was made. At least a cancellation is auditable.
+
+`413` is deliberately absent — the body limit is a plugin constant, not operator config, so no change makes that event succeed. `RETRYABLE_STATUS_CODES` is derived from the statuses the pipeline actually emits, and `retryable()`/`deferFor()` are typed to that union, so emitting an uncovered status is a compile error rather than a production surprise.
 
 Two deliberate choices worth knowing:
 

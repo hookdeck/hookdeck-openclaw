@@ -9,6 +9,7 @@ import {
   deferFor,
   retryable,
   RETRYABLE_STATUS_CODES,
+  RETRYABLE_STATUSES,
 } from "../src/protocol/outcome.js";
 
 describe("renderRetryAfterHeader", () => {
@@ -78,11 +79,11 @@ describe("isRetryableStatus", () => {
   it.each([
     [200, false],
     [202, false],
-    [400, false],
-    [401, false],
-    [404, false],
+    [400, true],
+    [401, true],
+    [404, true],
     [408, true],
-    [409, false],
+    [409, true],
     [413, false],
     [415, false],
     [429, true],
@@ -93,14 +94,28 @@ describe("isRetryableStatus", () => {
     expect(isRetryableStatus(status)).toBe(expected);
   });
 
-  it("agrees with the status codes we tell operators to provision", () => {
-    // The provisioned retry rule must cover every code we emit as retryable, or
-    // admission control becomes silent data loss. This asserts the two lists
-    // cannot drift apart unnoticed.
-    expect(RETRYABLE_STATUS_CODES).toEqual(["500-599", "429", "408"]);
-    for (const status of [408, 429, 500, 503]) {
+  it("covers every status the pipeline emits as retryable", () => {
+    // Two halves of one contract. Drift is silent data loss: we answer 404
+    // expecting a redelivery, the rule does not cover 404, the event is gone,
+    // and nothing records that a choice was made.
+    for (const status of RETRYABLE_STATUSES) {
       expect(isRetryableStatus(status)).toBe(true);
     }
+  });
+
+  it("expresses the provisioned rule in Hookdeck's own form", () => {
+    // Asserted against the derived list rather than a literal, so adding a
+    // retryable status cannot silently change what this test claims to check.
+    for (const status of RETRYABLE_STATUSES) {
+      const covered =
+        RETRYABLE_STATUS_CODES.includes(String(status)) ||
+        (status >= 500 && RETRYABLE_STATUS_CODES.includes("500-599"));
+      expect(covered, `status ${status} is not in the provisioned retry rule`).toBe(true);
+    }
+  });
+
+  it("excludes 413, whose limit is a plugin constant rather than operator config", () => {
+    expect(RETRYABLE_STATUS_CODES).not.toContain("413");
   });
 });
 

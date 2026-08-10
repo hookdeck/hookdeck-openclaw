@@ -129,6 +129,13 @@
         "default": 10,
         "description": "Retry-After sent when deferring a delivery at capacity."
       },
+      "deferAttemptLimit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 5,
+        "description": "Deferrals of the same event before the short Retry-After is dropped and exponential backoff takes over."
+      },
       "dedupe": {
         "type": "object",
         "additionalProperties": false,

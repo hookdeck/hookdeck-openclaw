@@ -212,13 +212,17 @@ async function runPipeline(
   }
   if (!deps.inFlight.acquire(eventId)) {
     logger.debug(`route '${routeId}': at max_concurrent (${config.maxConcurrent}), deferring`);
+    const message = `at capacity (${config.maxConcurrent} concurrent)`;
+    // A short Retry-After is right only while "capacity frees up in seconds"
+    // holds. The attempt counter makes that observable rather than assumed:
+    // once an event has been deferred this many times, capacity plainly is not
+    // recovering, so hand pacing back to exponential backoff instead of
+    // spending the remaining budget at a fixed interval.
+    const exhaustedDeferrals = (delivery.attemptCount ?? 1) > config.deferAttemptLimit;
     return {
-      plan: deferFor(
-        503,
-        "busy",
-        config.busyRetryAfterSeconds,
-        `at capacity (${config.maxConcurrent} concurrent)`,
-      ),
+      plan: exhaustedDeferrals
+        ? retryable(503, "busy", `${message}; deferred too many times, backing off`)
+        : deferFor(503, "busy", config.busyRetryAfterSeconds, message),
       extra: {},
       routeId,
       delivery,

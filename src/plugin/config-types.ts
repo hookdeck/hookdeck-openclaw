@@ -139,6 +139,13 @@ export interface HookdeckPluginConfig {
    * CLI destinations have no `rate_limit` field. */
   maxConcurrent: number;
   busyRetryAfterSeconds: number;
+  /**
+   * Deferrals of the SAME event before we stop sending a short `Retry-After`
+   * and let exponential backoff pace it. Capacity that has not recovered after
+   * this many attempts is not the transient condition the short interval
+   * assumes.
+   */
+  deferAttemptLimit: number;
   dedupe: {
     ttlHours: number;
   };
