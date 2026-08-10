@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   matchRoute,
@@ -243,5 +244,59 @@ describe("matchRoute — Hookdeck path forwarding", () => {
   it("does not treat a longer sibling name as a sub-path", () => {
     // A bare string prefix would wrongly match route `stripe` here.
     expect(matchRoute(config, "/hookdeck/stripe-test")).toBeUndefined();
+  });
+});
+
+describe("the manifest schema and the config parser must agree", () => {
+  // The host validates plugin config against `configSchema` with
+  // additionalProperties: false, and REFUSES TO START the whole Gateway on a
+  // key it does not know. `tools` was implemented, parsed, documented in the
+  // README — and missing from the schema, so any operator who set
+  // `tools.allowMutations` got "Gateway failed to start: must not have
+  // additional properties". Found by setting it, not by reading anything.
+  const manifest = JSON.parse(
+    readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as {
+    configSchema: {
+      additionalProperties?: boolean;
+      properties: Record<string, { properties?: Record<string, unknown> }>;
+    };
+  };
+
+  it("declares every key the parser produces", () => {
+    const parsed = parseHookdeckConfig({
+      signingSecret: "whsec",
+      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+    });
+    if (!parsed.ok) throw new Error("fixture should parse");
+
+    const declared = new Set(Object.keys(manifest.configSchema.properties));
+    const missing = Object.keys(parsed.config).filter((k) => !declared.has(k));
+    expect(missing, "config keys absent from openclaw.plugin.json configSchema").toEqual([]);
+  });
+
+  it("declares nothing the parser would reject", () => {
+    // The other direction: a schema key with no parser support is config an
+    // operator can set that silently does nothing.
+    const declared = Object.keys(manifest.configSchema.properties);
+    const parsed = parseHookdeckConfig({
+      signingSecret: "whsec",
+      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+    });
+    if (!parsed.ok) throw new Error("fixture should parse");
+
+    const known = new Set([...Object.keys(parsed.config), "signingSecret", "apiKey"]);
+    expect(declared.filter((k) => !known.has(k))).toEqual([]);
+  });
+
+  it("accepts tools.allowMutations, the key that broke a real Gateway", () => {
+    const parsed = parseHookdeckConfig({
+      signingSecret: "whsec",
+      tools: { allowMutations: false },
+      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+    });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.config.tools.allowMutations).toBe(false);
+    expect(manifest.configSchema.properties.tools?.properties).toHaveProperty("allowMutations");
   });
 });

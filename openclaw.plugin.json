@@ -47,48 +47,6 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "headerPrefix": {
-        "type": "string",
-        "minLength": 1,
-        "default": "x-hookdeck",
-        "description": "Prefix for Hookdeck's delivery headers. White-labelable per Hookdeck project, so read from config rather than assumed."
-      },
-      "signingSecret": {
-        "description": "Default Hookdeck signing secret (Settings -> Project -> Secrets). Routes may override.",
-        "anyOf": [
-          {
-            "type": "string",
-            "minLength": 1
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "source",
-              "provider",
-              "id"
-            ],
-            "properties": {
-              "source": {
-                "type": "string",
-                "enum": [
-                  "env",
-                  "file",
-                  "exec"
-                ]
-              },
-              "provider": {
-                "type": "string",
-                "minLength": 1
-              },
-              "id": {
-                "type": "string",
-                "minLength": 1
-              }
-            }
-          }
-        ]
-      },
       "apiKey": {
         "description": "Hookdeck API key. Optional \u2014 without it the plugin runs ingress-only: verification, deduplication and dispatch all work, but work interrupted by a crash cannot be re-queued.",
         "anyOf": [
@@ -125,6 +83,57 @@
           }
         ]
       },
+      "busyRetryAfterSeconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3600,
+        "default": 10,
+        "description": "Retry-After sent when deferring a delivery at capacity."
+      },
+      "catchUp": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Replay requests that arrived while no listener was attached."
+          },
+          "minGapSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400,
+            "default": 30,
+            "description": "Below this, an outage is not worth a bulk replay."
+          }
+        }
+      },
+      "dedupe": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ttlHours": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 720,
+            "default": 168,
+            "description": "Ledger retention. Must exceed Hookdeck's one-week automatic retry ceiling."
+          }
+        }
+      },
+      "deferAttemptLimit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 5,
+        "description": "Deferrals of the same event before the short Retry-After is dropped and exponential backoff takes over."
+      },
+      "headerPrefix": {
+        "type": "string",
+        "minLength": 1,
+        "default": "x-hookdeck",
+        "description": "Prefix for Hookdeck's delivery headers. White-labelable per Hookdeck project, so read from config rather than assumed."
+      },
       "ingress": {
         "type": "object",
         "additionalProperties": false,
@@ -137,42 +146,27 @@
           }
         }
       },
-      "transport": {
+      "maxConcurrent": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+        "default": 4,
+        "description": "Local admission control. In CLI transport this is the only limit, since CLI destinations carry no rate_limit field."
+      },
+      "pause": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "mode": {
-            "type": "string",
-            "enum": [
-              "cli",
-              "http",
-              "none"
-            ],
-            "default": "none",
-            "description": "cli supervises a `hookdeck listen` child per route (zero ingress, but a CLI destination is not durable while disconnected). http expects a reachable Gateway and gives the full reliability stack. none leaves transport to the operator."
+          "onShutdown": {
+            "type": "boolean",
+            "default": true,
+            "description": "Pause the connection before stopping the listener, so events are held at HOLD rather than discarded. A clean CLI shutdown otherwise forfeits the server's grace window."
           },
-          "port": {
+          "shutdownTimeoutMs": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 65535,
-            "default": 18789,
-            "description": "Gateway port the CLI forwards to."
-          },
-          "binaryPath": {
-            "type": "string",
-            "minLength": 1,
-            "default": "hookdeck",
-            "description": "Resolved explicitly on PATH, because a shadowed binary defeats the version gate."
-          },
-          "allowUnsupportedVersion": {
-            "type": "boolean",
-            "default": false,
-            "description": "Downgrade the >=2.4.0 gate to a warning. Versions below 2.3.2 silently stop delivering after a session expires."
-          },
-          "publicUrl": {
-            "type": "string",
-            "format": "uri",
-            "description": "Public base URL of the Gateway, required for http transport provisioning."
+            "maximum": 60000,
+            "default": 5000
           }
         }
       },
@@ -198,93 +192,6 @@
           }
         }
       },
-      "pause": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "onShutdown": {
-            "type": "boolean",
-            "default": true,
-            "description": "Pause the connection before stopping the listener, so events are held at HOLD rather than discarded. A clean CLI shutdown otherwise forfeits the server's grace window."
-          },
-          "shutdownTimeoutMs": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 60000,
-            "default": 5000
-          }
-        }
-      },
-      "catchUp": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": true,
-            "description": "Replay requests that arrived while no listener was attached."
-          },
-          "minGapSeconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 86400,
-            "default": 30,
-            "description": "Below this, an outage is not worth a bulk replay."
-          }
-        }
-      },
-      "maxConcurrent": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 1000,
-        "default": 4,
-        "description": "Local admission control. In CLI transport this is the only limit, since CLI destinations carry no rate_limit field."
-      },
-      "busyRetryAfterSeconds": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 3600,
-        "default": 10,
-        "description": "Retry-After sent when deferring a delivery at capacity."
-      },
-      "deferAttemptLimit": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 50,
-        "default": 5,
-        "description": "Deferrals of the same event before the short Retry-After is dropped and exponential backoff takes over."
-      },
-      "dedupe": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "ttlHours": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "maximum": 720,
-            "default": 168,
-            "description": "Ledger retention. Must exceed Hookdeck's one-week automatic retry ceiling."
-          }
-        }
-      },
-      "storage": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": true,
-            "description": "Persist the ledger and dead-letter log under the plugin state directory. Off means memory-only: exactly-once within a process, at-least-once across a restart, and no crash recovery."
-          },
-          "deadLetterMaxEntries": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100000,
-            "default": 500,
-            "description": "Dead-letter entries retained before the oldest are dropped."
-          }
-        }
-      },
       "recovery": {
         "type": "object",
         "additionalProperties": false,
@@ -300,17 +207,6 @@
             "maximum": 10000,
             "default": 50,
             "description": "Caps a crash loop from storming the Hookdeck API. Oldest events are recovered first."
-          }
-        }
-      },
-      "safety": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "allowRetryCancel": {
-            "type": "boolean",
-            "default": false,
-            "description": "Permit 'Retry-After: -1' to cancel Hookdeck's automatic retries on permanently-invalid input. Off by default: with it off, wire behaviour matches the sibling Hermes and n8n plugins exactly."
           }
         }
       },
@@ -609,6 +505,122 @@
                 }
               }
             }
+          }
+        }
+      },
+      "safety": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowRetryCancel": {
+            "type": "boolean",
+            "default": false,
+            "description": "Permit 'Retry-After: -1' to cancel Hookdeck's automatic retries on permanently-invalid input. Off by default: with it off, wire behaviour matches the sibling Hermes and n8n plugins exactly."
+          }
+        }
+      },
+      "signingSecret": {
+        "description": "Default Hookdeck signing secret (Settings -> Project -> Secrets). Routes may override.",
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "env",
+                  "file",
+                  "exec"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        ]
+      },
+      "storage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Persist the ledger and dead-letter log under the plugin state directory. Off means memory-only: exactly-once within a process, at-least-once across a restart, and no crash recovery."
+          },
+          "deadLetterMaxEntries": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 500,
+            "description": "Dead-letter entries retained before the oldest are dropped."
+          }
+        }
+      },
+      "tools": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Agent-facing tool surface.",
+        "properties": {
+          "allowMutations": {
+            "type": "boolean",
+            "default": true,
+            "description": "When false, the agent can diagnose but not act: setup, pause and replay are not registered, and hookdeck_issues can list and inspect but not acknowledge, resolve or dismiss."
+          }
+        }
+      },
+      "transport": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "http",
+              "none"
+            ],
+            "default": "none",
+            "description": "cli supervises a `hookdeck listen` child per route (zero ingress, but a CLI destination is not durable while disconnected). http expects a reachable Gateway and gives the full reliability stack. none leaves transport to the operator."
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 18789,
+            "description": "Gateway port the CLI forwards to."
+          },
+          "binaryPath": {
+            "type": "string",
+            "minLength": 1,
+            "default": "hookdeck",
+            "description": "Resolved explicitly on PATH, because a shadowed binary defeats the version gate."
+          },
+          "allowUnsupportedVersion": {
+            "type": "boolean",
+            "default": false,
+            "description": "Downgrade the >=2.4.0 gate to a warning. Versions below 2.3.2 silently stop delivering after a session expires."
+          },
+          "publicUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Public base URL of the Gateway, required for http transport provisioning."
           }
         }
       }
