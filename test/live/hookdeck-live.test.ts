@@ -62,17 +62,16 @@ run("live Hookdeck API", () => {
   });
 
   afterAll(async () => {
-    // This used to only PAUSE what it created, while the file comment claimed
-    // it deleted. Paused connections are not cleaned up by anything, so every
-    // run left a connection, a source and a destination behind; 37 of each had
-    // accumulated in a real project before it was spotted.
+    // Deletes rather than pauses: a paused connection is cleaned up by
+    // nothing, so pausing would leave a connection, a source and a destination
+    // behind on every run.
     //
-    // The rule that produced that mistake — "never disable or delete" — is a
-    // rule about an OPERATOR's connections, where deleting cancels pending
-    // events. It does not apply to throwaway objects this suite just made.
+    // The "never disable or delete" rule elsewhere in this repo is about an
+    // OPERATOR's connections, where deleting cancels pending events. It does
+    // not apply to throwaway objects this suite just created.
     //
-    // Sweeps by prefix rather than by this run's ids, so a run that crashes or
-    // is interrupted before teardown gets cleaned up by the next one.
+    // Sweeps by prefix rather than by this run's ids, so a run interrupted
+    // before teardown is cleaned up by the next one.
     const swept = await sweepCiResources(apiKey!).catch((err) => {
       console.warn(`[live] cleanup failed: ${String(err)}`);
       return undefined;
@@ -158,7 +157,7 @@ run("live Hookdeck API", () => {
 });
 
 /**
- * Read-only checks against the endpoints M6 added.
+ * Read-only checks against the issue and attempt endpoints.
  *
  * Deliberately never mutates an Issue. `PUT /issues/{id}` and
  * `DELETE /issues/{id}` change what the project's operators see in their

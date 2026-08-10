@@ -5,31 +5,26 @@ import { createBackoff, type BackoffOptions } from "./backoff.js";
 /**
  * Supervises one `hookdeck listen` child per route.
  *
- * One child per route is our choice, not the CLI's limit — correcting an
- * earlier claim in this file. `hookdeck listen` 2.4.0 takes a comma-separated
- * source list, or `*` for every source, and the positional is optional.
- *
- * We do not use that, because `--path` is a single value per invocation. Each
- * route has its own ingress path, and multiplexing sources through one child
- * would collapse them onto one path, leaving the source name header as the only
- * way to tell routes apart. That trades a process for a weaker routing key and
- * a provisioning model that no longer matches what an operator sees. A process
- * per route is the cheaper side of that trade.
+ * `hookdeck listen` can forward several sources at once, but `--path` takes a
+ * single value per invocation. Since each route has its own ingress path,
+ * multiplexing would collapse them onto one path and leave the source-name
+ * header as the only way to tell routes apart. One child per route keeps the
+ * routing key and the provisioned connections aligned.
  *
  * Two flags are not optional in practice:
  *
  *  - `--output compact`. The default is a full-screen interactive UI that exits
- *    immediately when stdout is not a TTY. A supervisor piping it into a log
- *    gets a process that dies after ~1s and restarts forever, with the backoff
- *    disguising misconfiguration as flakiness.
+ *    immediately when stdout is not a TTY, so a supervisor piping it into a log
+ *    sees a process that dies within a second and restarts forever, with the
+ *    backoff disguising misconfiguration as flakiness.
  *  - the API key via `env`, never argv, because argv is world-readable in `ps`.
  *
- * And one command is deliberately never run: `hookdeck ci --api-key`. It looks
- * like an idempotent login and is not — it rewrites the CLI's global config,
- * swaps the stored key for a session key, and switches the active project. A
- * sibling plugin shipped that and silently repointed a developer's CLI away
- * from another project, leaving the original key unrecoverable. Authentication
- * is the operator's business, not a side effect of starting a gateway.
+ * One command is deliberately never run: `hookdeck ci --api-key`. It looks like
+ * an idempotent login but rewrites the CLI's global config, swaps the stored
+ * key for a session key, and switches the active project — which can leave a
+ * developer pointed at the wrong project with the original key unrecoverable.
+ * Authentication is the operator's business, not a side effect of starting a
+ * gateway.
  */
 
 export interface ChildHandle {
@@ -126,12 +121,10 @@ export function createCliListener(
   let restartTimer: { cancel(): void } | undefined;
 
   /**
-   * Scrubs a line of child output once, at the boundary.
-   *
-   * Every consumer takes it from here: the ring buffer `hookdeck_status`
-   * exposes, the debug log, and the readiness match. Scrubbing inside `record`
-   * alone left the debug log printing the raw line — a value removed in one
-   * place and not the other has not really been removed.
+   * Scrubs a line of child output once, at the boundary, so every consumer
+   * takes it from here: the ring buffer `hookdeck_status` exposes, the debug
+   * log, and the readiness match. Scrubbing further downstream would leave one
+   * of those printing the raw line.
    */
   function sanitise(line: string): string {
     return scrubSecrets(line, [options.apiKey]);

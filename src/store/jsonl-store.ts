@@ -122,9 +122,11 @@ export function createJsonlStore<T>(
   }
 
   /**
-   * Drops expired entries from memory. Compaction used to filter them out of
-   * the file while leaving them in the map, so a long-running process
-   * accumulated dead entries forever — the file stayed small and memory did not.
+   * Drops expired entries from memory.
+   *
+   * Compaction rewrites the file; this keeps the in-memory map in step. Without
+   * both, a long-running process holds every entry it has ever seen while the
+   * file on disk stays small.
    */
   function evictExpired(): number {
     const stamp = now();

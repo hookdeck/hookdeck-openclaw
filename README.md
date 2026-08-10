@@ -2,7 +2,7 @@
 
 Reliable webhooks for OpenClaw. Puts the [Hookdeck](https://hookdeck.com) Event Gateway in front of your OpenClaw Gateway so inbound webhooks are verified, deduplicated and retryable.
 
-> **Status: M5.** Signature verification, durable deduplication, crash recovery, dead-lettering, route filters, all three dispatch modes, connection provisioning, CLI supervision, pause-on-shutdown, outage catch-up and the agent-facing tools all work — see [Limitations](#limitations) for what remains. Nothing below describes behaviour that isn't implemented.
+> **Status: pre-1.0.** Signature verification, durable deduplication, crash recovery, dead-lettering, route filters, all three dispatch modes, connection provisioning, CLI supervision, pause-on-shutdown, outage catch-up and the agent-facing tools are implemented — see [Limitations](#limitations) for what remains. Nothing below describes behaviour that isn't implemented.
 
 ## Why
 
@@ -291,7 +291,7 @@ Each result carries `source: "live" | "disk"`. On a disk view, in-flight capacit
 > 1. **`contracts.tools` in the manifest**, listing every tool name. Without it the host logs `plugin must declare contracts.tools` and registers nothing.
 > 2. **The `AgentTool` contract**: a required `label`, an `execute(toolCallId, params, …)` signature, and an `AgentToolResult` return (use `jsonResult` from `openclaw/plugin-sdk/core`). Get any of these wrong and the host accepts the registration while the agent never sees the tool.
 >
-> Both shipped broken here first, with a clean typecheck and a passing suite. Tests now assert the manifest matches the code, every tool has a label, the execute arity is right, and the return is an `AgentToolResult`.
+> Neither failure is visible to a typecheck or to handler-level tests, so `test/tool-wiring.test.ts` asserts the manifest matches the code, every tool has a label, the execute arity is right, and the return is an `AgentToolResult`.
 
 ### Hookdeck Issues are the dead-letter queue
 
@@ -351,7 +351,7 @@ npm test
 npm run typecheck
 ```
 
-487 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+491 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 

@@ -749,9 +749,9 @@ describe("handleDelivery — deferral backs off once capacity is plainly not rec
 
 describe("handleDelivery — dispatcher admission happens before the ledger write", () => {
   it("writes NO ledger row when the dispatcher is at capacity", async () => {
-    // The agent dispatcher bounds background runs that outlive the request, and
-    // it used to refuse inside dispatch() — after a `running` row had already
-    // been written for work that never started, leaving an orphan for boot
+    // The agent dispatcher bounds background runs that outlive the request.
+    // Refusing inside dispatch() would be too late: a `running` row would
+    // already exist for work that never started, leaving an orphan for boot
     // recovery to re-queue.
     const { deps, ledger, dispatch } = harness();
     deps.dispatcherFor = () => ({ dispatch, canAccept: () => false });

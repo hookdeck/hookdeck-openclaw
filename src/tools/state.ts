@@ -11,21 +11,15 @@ import { createFsStoreIo } from "../store/store-io.js";
 /**
  * Reads the plugin's state straight from disk.
  *
- * The tools used to depend on the in-memory runtime the service populates,
- * which meant they only worked in the process where the service had started.
- * That is not reliably the process an agent turn runs in — OpenClaw loads the
- * plugin in the CLI process for `openclaw agent`, and a turn logs the plugin's
- * config warnings more than once, so `register()` is plainly running more than
- * once. Every tool would then answer "the service is not running" no matter how
- * healthy the deployment was.
+ * A tool call does not reliably land in the process where the service started:
+ * OpenClaw loads the plugin in the CLI process too, so `register()` runs more
+ * than once and the in-memory runtime may be absent. The ledger, dead-letter
+ * log and cursors are JSONL files under the state directory, and
+ * `resolveStateDir()` answers the same path in every process, so a reader can
+ * open them wherever it happens to be.
  *
- * The ledger, dead-letter log and cursors are already JSONL files under the
- * state directory, and `resolveStateDir()` answers the same path in any
- * process. So a reader can open them wherever it happens to be, and the
- * question of which process the tool call landed in stops mattering.
- *
- * Strictly read-only: the Gateway owns these files, and a second writer — or
- * the compaction `load()` would otherwise perform — could corrupt them.
+ * Strictly read-only. The Gateway owns these files; a second writer — or the
+ * compaction that `load()` would otherwise perform — could corrupt them.
  */
 
 export const PLUGIN_STATE_SUBDIR = "hookdeck";

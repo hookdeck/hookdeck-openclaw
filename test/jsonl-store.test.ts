@@ -204,9 +204,9 @@ describe("createJsonlStore — memory-only mode", () => {
 
 describe("createJsonlStore — expiry does not leak memory", () => {
   it("evicts expired entries from memory during compaction, not just from the file", async () => {
-    // Compaction used to filter expired records out of the written file while
-    // leaving them in the map, so a long-running process grew forever even
-    // though the file stayed small.
+    // Compaction must drop expired records from memory as well as from the
+    // file. Filtering only the file leaves a long-running process growing
+    // without bound while the file on disk stays small.
     let clock = 0;
     const io = createFakeStoreIo();
     const store = build(io, {
@@ -229,10 +229,10 @@ describe("createJsonlStore — expiry does not leak memory", () => {
   });
 
   it("compacts a mostly-dead file promptly on load", async () => {
-    // `appended` used to reset to 0 after load, so a file left bloated by an
-    // ungraceful shutdown would not compact until COMPACTION_FLOOR fresh
-    // appends had accumulated. Plant the bloated file directly rather than
-    // trying to produce one, which the in-process compactor would prevent.
+    // A file left bloated by an ungraceful shutdown must compact on load,
+    // rather than waiting for COMPACTION_FLOOR fresh appends. The bloated file
+    // is planted directly, since the in-process compactor prevents one forming
+    // naturally.
     const io = createFakeStoreIo();
     const bloated = Array.from({ length: 500 }, (_, i) =>
       JSON.stringify({ k: "same", d: { id: "same", value: i, createdAt: 0 } }),

@@ -119,14 +119,12 @@ export function buildConnectionSpec(spec: ProvisionRouteSpec): ConnectionSpec {
 /**
  * The one place a route becomes a provisioning spec.
  *
- * There were two of these — one in the transport manager, one in
- * `hookdeck_setup` — and they disagreed. The tool's copy omitted the source
- * verification block and the dedupe rule, and since `PUT /connections` is an
- * upsert, running setup would have *stripped provider verification off a live
- * source*: a verified Stripe source silently becomes an open endpoint. It also
- * made the fingerprints disagree, so the dry-run diff described a change nobody
- * had asked for. Two builders for one wire format is the defect; the fix is
- * that there is now one.
+ * Keep it that way. `PUT /connections` is an upsert, so a second builder that
+ * omitted a field would not fail — it would quietly remove that field from a
+ * live connection. Dropping the source verification block, for instance, turns
+ * a verified source into an open endpoint. A single builder also keeps the
+ * provisioning fingerprint meaningful, since a spec built two ways hashes two
+ * ways and every diff looks like a change.
  */
 export function routeProvisionSpec(options: {
   config: HookdeckPluginConfig;

@@ -404,9 +404,9 @@ describe("review regressions", () => {
   });
 
   it("adopts a configured connectionId, so pause works without provisioning", async () => {
-    // pause-on-shutdown and catch-up both act on a connection id, which only
-    // provisioning used to write — leaving both silently inert for anyone who
-    // provisioned by hand.
+    // pause-on-shutdown and catch-up both act on a connection id. Without
+    // adoption they would be silently inert for anyone who provisions by
+    // hand.
     const cfg = config({
       routes: {
         stripe: {

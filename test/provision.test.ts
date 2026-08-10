@@ -237,8 +237,8 @@ describe("we use Hookdeck's own features rather than only our local copies", () 
   });
 
   it("gives the same fingerprint from either caller for the same route", () => {
-    // The setup tool and the service used to build different specs, so the
-    // dry-run diff described a change nobody had asked for.
+    // The setup tool and the service must produce byte-identical specs, or
+    // the fingerprint changes and every dry run reports a phantom diff.
     const config = base();
     const route = config.routes.stripe!;
     const a = fingerprint(

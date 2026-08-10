@@ -3,8 +3,14 @@ import { join } from "node:path";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 import { parseHookdeckConfig } from "./src/plugin/config-parse.js";
-import type { HookdeckPluginConfig, RouteConfig } from "./src/plugin/config-types.js";
-import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "./src/plugin/host-api.js";
+import type {
+  HookdeckPluginConfig,
+  RouteConfig,
+} from "./src/plugin/config-types.js";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginServiceContext,
+} from "./src/plugin/host-api.js";
 import { createHostSecretResolver } from "./src/plugin/host-secrets.js";
 import { resolveSecret, UnresolvedSecretError } from "./src/plugin/secrets.js";
 import { createAgentDispatcher } from "./src/dispatch/agent.js";
@@ -12,20 +18,43 @@ import { createTaskFlowRunner } from "./src/dispatch/runners.js";
 import { createTaskFlowDispatcher } from "./src/dispatch/taskflow.js";
 import type { Dispatcher } from "./src/dispatch/types.js";
 import { createWakeDispatcher } from "./src/dispatch/wake.js";
-import { createHookdeckClient, type HookdeckClient } from "./src/hookdeck/client.js";
-import { handleDelivery, writePlan, type Logger } from "./src/ingress/handler.js";
+import {
+  createHookdeckClient,
+  type HookdeckClient,
+} from "./src/hookdeck/client.js";
+import {
+  handleDelivery,
+  writePlan,
+  type Logger,
+} from "./src/ingress/handler.js";
 import { deferFor, retryable } from "./src/protocol/outcome.js";
 import { reconcileOrphans } from "./src/recovery.js";
 import { registerHookdeckTools } from "./src/tools/index.js";
-import type { ToolDeps } from "./src/tools/handlers.js";
+import type { ToolDeps } from "./src/tools/deps.js";
 import { openDiskState } from "./src/tools/state.js";
-import { createDeadLetterLog, type DeadLetterLog } from "./src/store/deadletter.js";
-import { createInFlightRegistry, type InFlightRegistry } from "./src/store/in-flight.js";
+import {
+  createDeadLetterLog,
+  type DeadLetterLog,
+} from "./src/store/deadletter.js";
+import {
+  createInFlightRegistry,
+  type InFlightRegistry,
+} from "./src/store/in-flight.js";
 import { createLedger, type Ledger } from "./src/store/ledger.js";
-import { createCursorStore, type CursorStore } from "./src/store/cursor-store.js";
+import {
+  createCursorStore,
+  type CursorStore,
+} from "./src/store/cursor-store.js";
 import { createFsStoreIo } from "./src/store/store-io.js";
-import { createTransportManager, type TransportManager } from "./src/transport/manager.js";
-import { findBinaries, nodeSpawnChild, readCliVersion } from "./src/transport/node-spawn.js";
+import {
+  createTransportManager,
+  type TransportManager,
+} from "./src/transport/manager.js";
+import {
+  findBinaries,
+  nodeSpawnChild,
+  readCliVersion,
+} from "./src/transport/node-spawn.js";
 
 const PLUGIN_ID = "hookdeck";
 
@@ -37,7 +66,9 @@ interface Runtime {
   transport: TransportManager;
   client?: HookdeckClient | undefined;
   /** Shared with the setup tool so both build the same provisioning spec. */
-  resolveVerification(routeId: string): Promise<Record<string, string> | undefined>;
+  resolveVerification(
+    routeId: string,
+  ): Promise<Record<string, string> | undefined>;
 }
 
 export default definePluginEntry({
@@ -60,7 +91,9 @@ export default definePluginEntry({
       // is still registered so deliveries get a retryable 503 rather than a
       // 404, keeping them alive in Hookdeck until the config is fixed.
       for (const problem of parsed.problems) {
-        api.logger?.error?.(`config error at ${problem.path}: ${problem.message}`);
+        api.logger?.error?.(
+          `config error at ${problem.path}: ${problem.message}`,
+        );
       }
       api.registerHttpRoute({
         path: "/hookdeck",
@@ -71,7 +104,13 @@ export default definePluginEntry({
           res.statusCode = 503;
           res.setHeader("retry-after", "60");
           res.setHeader("content-type", "application/json; charset=utf-8");
-          res.end(JSON.stringify({ ok: false, code: "config_error", problems: parsed.problems }));
+          res.end(
+            JSON.stringify({
+              ok: false,
+              code: "config_error",
+              problems: parsed.problems,
+            }),
+          );
           return true;
         },
       });
@@ -98,7 +137,8 @@ export default definePluginEntry({
       if (existing !== undefined) return existing;
 
       const active = runtime;
-      if (active === undefined) throw new Error("dispatcher requested before service start");
+      if (active === undefined)
+        throw new Error("dispatcher requested before service start");
 
       let dispatcher: Dispatcher;
       switch (route.dispatch.mode) {
@@ -141,7 +181,8 @@ export default definePluginEntry({
               // with `missing scope: operator.write`. See dispatch/runners.ts.
               runner: createTaskFlowRunner({
                 controllerId: `hookdeck/${routeId}`,
-                bind: (sessionKey) => api.runtime.tasks.managedFlows.bindSession({ sessionKey }),
+                bind: (sessionKey) =>
+                  api.runtime.tasks.managedFlows.bindSession({ sessionKey }),
               }),
               ledger: active.ledger,
               deadLetter: active.deadLetter,
@@ -188,10 +229,14 @@ export default definePluginEntry({
 
         if (!config.storage.enabled) return undefined;
         try {
-          const disk = await openDiskState({ ttlHours: config.dedupe.ttlHours });
-          const apiKey = await resolveSecret(config.apiKey, "apiKey", hostSecrets).catch(
-            () => undefined,
-          );
+          const disk = await openDiskState({
+            ttlHours: config.dedupe.ttlHours,
+          });
+          const apiKey = await resolveSecret(
+            config.apiKey,
+            "apiKey",
+            hostSecrets,
+          ).catch(() => undefined);
           return {
             config,
             source: "disk",
@@ -199,7 +244,9 @@ export default definePluginEntry({
             deadLetter: disk.deadLetter,
             cursors: disk.cursors,
             logger: log,
-            ...(apiKey !== undefined ? { client: createHookdeckClient({ apiKey }) } : {}),
+            ...(apiKey !== undefined
+              ? { client: createHookdeckClient({ apiKey }) }
+              : {}),
             configWarnings: () => parsed.warnings,
           };
         } catch (err) {
@@ -217,7 +264,10 @@ export default definePluginEntry({
     const respondStarting = (res: Parameters<typeof writePlan>[0]) =>
       writePlan(
         res,
-        { plan: deferFor(503, "starting", 30, "plugin is still starting"), extra: {} },
+        {
+          plan: deferFor(503, "starting", 30, "plugin is still starting"),
+          extra: {},
+        },
         { allowRetryCancel: config.safety.allowRetryCancel },
       );
 
@@ -252,16 +302,29 @@ export default definePluginEntry({
                       `routes.${routeId}.signingSecret`,
                       hostSecrets,
                     )
-                  : resolveSecret(config.signingSecret, "signingSecret", hostSecrets),
+                  : resolveSecret(
+                      config.signingSecret,
+                      "signingSecret",
+                      hostSecrets,
+                    ),
             },
-            { method: req.method, url: req.url, headers: req.headers, stream: req },
+            {
+              method: req.method,
+              url: req.url,
+              headers: req.headers,
+              stream: req,
+            },
           );
-          writePlan(res, handled, { allowRetryCancel: config.safety.allowRetryCancel });
+          writePlan(res, handled, {
+            allowRetryCancel: config.safety.allowRetryCancel,
+          });
         } catch (err) {
           if (err instanceof UnresolvedSecretError) {
             log.warn(err.message);
           } else {
-            log.warn(`unhandled error: ${err instanceof Error ? err.stack : String(err)}`);
+            log.warn(
+              `unhandled error: ${err instanceof Error ? err.stack : String(err)}`,
+            );
           }
           // Retryable on purpose: whatever went wrong, the event should survive
           // in Hookdeck rather than being acknowledged into the void.
@@ -317,11 +380,18 @@ export default definePluginEntry({
           onDegrade,
         });
 
-        const apiKey = await resolveSecret(config.apiKey, "apiKey", hostSecrets).catch((err) => {
-          ctx.logger.warn?.(`[hookdeck] could not resolve apiKey: ${String(err)}`);
+        const apiKey = await resolveSecret(
+          config.apiKey,
+          "apiKey",
+          hostSecrets,
+        ).catch((err) => {
+          ctx.logger.warn?.(
+            `[hookdeck] could not resolve apiKey: ${String(err)}`,
+          );
           return undefined;
         });
-        const client = apiKey !== undefined ? createHookdeckClient({ apiKey }) : undefined;
+        const client =
+          apiKey !== undefined ? createHookdeckClient({ apiKey }) : undefined;
 
         // Before serving anything: hand interrupted work back to Hookdeck.
         const summary = await reconcileOrphans({
@@ -350,7 +420,9 @@ export default definePluginEntry({
           const verification = config.routes[routeId]?.verification;
           if (verification === undefined) return undefined;
           const out: Record<string, string> = {};
-          for (const [field, input] of Object.entries(verification.credentials)) {
+          for (const [field, input] of Object.entries(
+            verification.credentials,
+          )) {
             const value = await resolveSecret(
               input,
               `routes.${routeId}.verification.credentials.${field}`,
@@ -396,10 +468,14 @@ export default definePluginEntry({
         // After the ingress is live, so a catch-up replay lands on a route that
         // can serve it.
         await transport.start().catch((err) => {
-          ctx.logger.warn?.(`[hookdeck] transport start failed: ${String(err)}`);
+          ctx.logger.warn?.(
+            `[hookdeck] transport start failed: ${String(err)}`,
+          );
         });
 
-        const routes = Object.entries(config.routes).filter(([, r]) => r.enabled);
+        const routes = Object.entries(config.routes).filter(
+          ([, r]) => r.enabled,
+        );
         const stats = ledger.stats();
         ctx.logger.info?.(
           `[hookdeck] ingress ready on ${config.ingress.basePath} (${routes.length} route${

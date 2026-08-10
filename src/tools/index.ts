@@ -1,17 +1,15 @@
 import { jsonResult } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../plugin/host-api.js";
-import {
-  doctorHandler,
-  inspectEventHandler,
-  issuesHandler,
-  pauseHandler,
-  recentDeliveriesHandler,
-  replayHandler,
-  setupHandler,
-  statusHandler,
-  type ToolDeps,
-} from "./handlers.js";
+import { recentDeliveriesHandler } from "./deliveries.js";
+import type { ToolDeps } from "./deps.js";
+import { doctorHandler } from "./doctor.js";
+import { inspectEventHandler } from "./inspect.js";
+import { issuesHandler } from "./issues.js";
+import { pauseHandler } from "./pause.js";
+import { replayHandler } from "./replay.js";
+import { setupHandler } from "./setup.js";
+import { statusHandler } from "./status.js";
 
 /**
  * Registers the operator surface as agent tools.
@@ -79,9 +77,9 @@ export function registerHookdeckTools(
   options: RegisterToolsOptions,
 ): void {
   // `AgentTool.execute` is `(toolCallId, params, signal?, onUpdate?)` and must
-  // resolve to an AgentToolResult — not the bare value a handler returns.
-  // Getting either wrong produces a tool the host accepts and the agent never
-  // sees, which is exactly how this shipped the first time.
+  // resolve to an AgentToolResult, not the bare value a handler returns. The
+  // host accepts a tool with the wrong shape and the agent never sees it, so
+  // both details matter.
   const wrap =
     <P>(handler: (deps: ToolDeps, params: P) => Promise<unknown>) =>
     async (_toolCallId: string, params: P) => {

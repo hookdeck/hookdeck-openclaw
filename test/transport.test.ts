@@ -50,9 +50,9 @@ describe("checkCliVersion", () => {
     expect(checkCliVersion("hookdeck version 3.0.0").ok).toBe(true);
   });
 
-  it("rejects the version actually installed on this machine", () => {
-    // 2.3.0-beta.1 shipped by an npm-global install; below 2.3.2 the CLI
-    // silently stops delivering after a session expires.
+  it("rejects a pre-2.3.2 build", () => {
+    // Below 2.3.2 the CLI silently stops delivering once a session expires,
+    // which is the failure this plugin exists to prevent.
     const check = checkCliVersion("hookdeck version 2.3.0-beta.1");
     expect(check.ok).toBe(false);
     expect(check.message).toMatch(/silently stop/i);

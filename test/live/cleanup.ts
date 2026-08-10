@@ -8,10 +8,9 @@
  * one place that genuinely needs the verb, so it lives here and talks to the
  * API directly.
  *
- * It sweeps by PREFIX rather than by the ids created in this run. Runs that
- * crash, time out, or are killed with Ctrl-C never reach their teardown, and
- * an id-scoped sweep leaves those behind forever — which is exactly how 37
- * connections accumulated in a real project before anyone noticed.
+ * It sweeps by PREFIX rather than by the ids created in this run: a run that
+ * crashes, times out, or is interrupted never reaches its own teardown, and an
+ * id-scoped sweep would leave those objects behind permanently.
  */
 
 const BASE = "https://api.hookdeck.com/2025-07-01";

@@ -1,17 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HookdeckClient } from "../src/hookdeck/client.js";
 import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
-import {
-  doctorHandler,
-  issuesHandler,
-  inspectEventHandler,
-  pauseHandler,
-  recentDeliveriesHandler,
-  replayHandler,
-  setupHandler,
-  statusHandler,
-  type ToolDeps,
-} from "../src/tools/handlers.js";
+import { recentDeliveriesHandler } from "../src/tools/deliveries.js";
+import { type ToolDeps } from "../src/tools/deps.js";
+import { doctorHandler } from "../src/tools/doctor.js";
+import { inspectEventHandler } from "../src/tools/inspect.js";
+import { issuesHandler } from "../src/tools/issues.js";
+import { pauseHandler } from "../src/tools/pause.js";
+import { replayHandler } from "../src/tools/replay.js";
+import { setupHandler } from "../src/tools/setup.js";
+import { statusHandler } from "../src/tools/status.js";
 import { createCursorStore } from "../src/store/cursor-store.js";
 import { createDeadLetterLog } from "../src/store/deadletter.js";
 import { createInFlightRegistry } from "../src/store/in-flight.js";
@@ -689,10 +687,9 @@ describe("hookdeck_replay", () => {
 
 describe("manifest contracts.tools", () => {
   it("lists exactly the tools the code can register", async () => {
-    // The host refuses registerTool for any name absent from this contract, and
-    // LOGS the refusal rather than throwing — so forgetting to update the
-    // manifest produces a plugin that looks healthy with no tool surface at
-    // all. That is precisely how this shipped broken the first time.
+    // The host refuses registerTool for any name absent from this contract,
+    // and LOGS the refusal rather than throwing, so a manifest left un-updated
+    // produces a plugin that looks healthy with no tool surface at all.
     const { ALL_TOOL_NAMES } = await import("../src/tools/index.js");
     const manifest = JSON.parse(
       await (
@@ -1032,12 +1029,11 @@ describe("redaction — what reaches the model", () => {
   });
 });
 
-describe("event shapes we got wrong once", () => {
+describe("event shapes the API actually returns", () => {
   it("reads headers from event.data, where the API actually puts them", async () => {
-    // `Event` has no `headers` property in the 2025-07-01 schema — it has
-    // `data`. Reading `event.headers` yielded undefined, and an empty object
-    // was reported as the event's headers. A fake built to match the
-    // assumption rather than the API hid it.
+    // `Event` has no `headers` property in the 2025-07-01 schema; the request
+    // it describes lives under `data`. Fakes in this file are shaped to match
+    // the API for that reason.
     const d = await deps();
     const result = await inspectEventHandler(d, { eventId: "evt_1" });
     expect(result.hookdeck?.headers).not.toBeNull();
@@ -1045,7 +1041,7 @@ describe("event shapes we got wrong once", () => {
     expect(result.hookdeck?.method).toBe("POST");
   });
 
-  it("distinguishes 'no headers' from 'we looked in the wrong place'", async () => {
+  it("reports null rather than an empty object when none are returned", async () => {
     const d = await deps({
       client: fakeClient({
         getEvent: vi.fn(async () => ({
@@ -1147,10 +1143,9 @@ describe("issue counts stay honest under a type filter", () => {
 
 describe("issues name the connection, not just its id", () => {
   it("resolves webhook_id to the name a person would use", async () => {
-    // Issues carry only `webhook_id`. Asked to act on "the hermes-livetest
-    // connection", a real agent acknowledged a DIFFERENT issue, because
-    // "oldest" was the only key it could actually evaluate. Handing a model an
-    // id it cannot resolve is not a neutral omission.
+    // Issues carry only `webhook_id`, while people name connections. Without
+    // the name, a model asked to act on a named connection has no key to match
+    // on and will act on the wrong issue.
     const d = await deps();
     const result = await issuesHandler(d, {});
     expect(result.issues?.[0]?.connections).toEqual([

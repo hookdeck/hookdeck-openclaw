@@ -5,7 +5,7 @@ import {
   READ_TOOL_NAMES,
   registerHookdeckTools,
 } from "../src/tools/index.js";
-import type { ToolDeps } from "../src/tools/handlers.js";
+import type { ToolDeps } from "../src/tools/deps.js";
 import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
 import { createCursorStore } from "../src/store/cursor-store.js";
 import { createDeadLetterLog } from "../src/store/deadletter.js";
@@ -19,9 +19,8 @@ import { createFakeStoreIo } from "./fakes/fake-store-io.js";
  *
  * The handler tests call `statusHandler` and friends directly, which skips
  * everything in between: the registration list, the `wrap()` layer, the
- * not-started path, and the `deps()` closure. That gap is exactly where M5
- * shipped broken — every tool was refused by the host and every handler test
- * still passed.
+ * not-started path, and the `deps()` closure. A tool can be refused by the host
+ * for reasons none of those tests can see, so this covers the seam.
  */
 
 interface CapturedTool {
@@ -93,9 +92,7 @@ async function liveDeps(): Promise<ToolDeps> {
 describe("tool registration — the AgentTool contract", () => {
   it("gives every tool the required label", () => {
     // `AgentTool` requires `label`. Without it the host accepts the
-    // registration and the agent never sees the tool — which is exactly how
-    // M5 shipped: 7 declared, 0 rejections, and the model reporting it had no
-    // hookdeck tools available.
+    // registration, reports no rejection, and the agent never sees the tool.
     for (const tool of captureTools({}).tools) {
       expect(tool.label, tool.name).toBeTruthy();
       expect(typeof tool.label).toBe("string");

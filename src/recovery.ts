@@ -16,11 +16,10 @@ import type { Ledger } from "./store/ledger.js";
  * concretely here, because OpenClaw's own durable queue (`openChannelIngressQueue`)
  * is gated to bundled and trusted-official plugins and unavailable to us.
  *
- * The corollary, stated where operators will look rather than buried in a
- * comment: recovery can re-run an event whose dispatch completed in the instant
- * before the crash. That is the at-least-once contract the whole design already
- * assumes, not a new hazard — but it is the kind of thing discovered via a
- * duplicate side effect at 2am.
+ * One corollary, also stated in the README: recovery can re-run an event whose
+ * dispatch completed in the instant before the crash. That is the at-least-once
+ * contract the design already assumes, but it is worth knowing before a
+ * duplicate side effect surfaces it.
  */
 
 export interface ReconcileOptions {

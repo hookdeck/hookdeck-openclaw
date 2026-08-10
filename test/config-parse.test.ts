@@ -300,7 +300,7 @@ describe("the manifest schema and the config parser must agree", () => {
     expect(declared.filter((k) => !known.has(k))).toEqual([]);
   });
 
-  it("accepts tools.allowMutations, the key that broke a real Gateway", () => {
+  it("accepts tools.allowMutations in both the parser and the schema", () => {
     const parsed = parseHookdeckConfig({
       signingSecret: "whsec",
       tools: { allowMutations: false },

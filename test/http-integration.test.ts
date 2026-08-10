@@ -20,11 +20,11 @@ import { createMemoryLedger } from "../src/store/ledger.js";
 /**
  * End-to-end over a real socket.
  *
- * The unit tests feed the handler a `Readable`, which is convenient but does not
- * exercise the assumption M1 actually rests on: that the route handler receives
- * an UNCONSUMED request stream and can read byte-faithful raw bytes off it. This
- * suite posts real HTTP with real chunked bodies, including multi-byte UTF-8,
- * and verifies the signature still matches.
+ * The unit tests feed the handler a `Readable`, which is convenient but does
+ * not exercise the assumption signature verification rests on: that the route
+ * handler receives an UNCONSUMED request stream and can read byte-faithful raw
+ * bytes off it. This suite posts real HTTP with real chunked bodies, including
+ * multi-byte UTF-8, and verifies the signature still matches.
  */
 
 const SECRET = "whsec_test";
