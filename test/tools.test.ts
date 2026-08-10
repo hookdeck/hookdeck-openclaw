@@ -533,3 +533,49 @@ describe("we do not reimplement Hookdeck's dead-letter queue", () => {
     expect(result.locallyRecorded).toHaveLength(0);
   });
 });
+
+describe("hookdeck_setup and provider verification", () => {
+  const verified = {
+    routes: {
+      stripe: {
+        source: "stripe",
+        dispatch: { mode: "wake", sessionKey: "main" },
+        verification: { provider: "STRIPE", credentials: { webhook_secret: "whsec_provider" } },
+      },
+    },
+  };
+
+  it("refuses to apply a verified route whose credentials it cannot resolve", async () => {
+    // PUT /connections is an upsert. Applying a spec with no source auth block
+    // would strip verification off a live source, and "applied: true" is the
+    // last message anyone would read as a warning.
+    const d = await deps({ resolveVerification: async () => undefined }, verified);
+    const result = await setupHandler(d, { dryRun: false });
+    const first = result.results?.[0] as { applied: boolean; error: string } | undefined;
+
+    expect(first).toMatchObject({ applied: false });
+    expect(String(first?.error)).toMatch(/no verification/i);
+    expect(d.client!.upsertConnection).not.toHaveBeenCalled();
+  });
+
+  it("sends the source auth block when they do resolve", async () => {
+    const d = await deps(
+      { resolveVerification: async () => ({ webhook_secret: "whsec_provider" }) },
+      verified,
+    );
+    await setupHandler(d, { dryRun: false });
+
+    const spec = (d.client!.upsertConnection as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as { source: { config?: Record<string, unknown> } };
+    expect(spec.source.config).toMatchObject({ auth_type: "STRIPE" });
+  });
+
+  it("does not echo the provider secret back to the model on a dry run", async () => {
+    const d = await deps(
+      { resolveVerification: async () => ({ webhook_secret: "whsec_provider" }) },
+      verified,
+    );
+    const result = await setupHandler(d, { dryRun: true });
+    expect(JSON.stringify(result)).not.toContain("whsec_provider");
+  });
+});

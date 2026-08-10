@@ -1,6 +1,11 @@
 import { runCatchUp } from "../catchup.js";
 import type { HookdeckClient } from "../hookdeck/client.js";
-import { buildConnectionSpec, fingerprint, uncoveredStatuses } from "../hookdeck/provision.js";
+import {
+  buildConnectionSpec,
+  fingerprint,
+  routeProvisionSpec,
+  uncoveredStatuses,
+} from "../hookdeck/provision.js";
 import type { Logger } from "../ingress/handler.js";
 import type { HookdeckPluginConfig } from "../plugin/config-types.js";
 import { RETRYABLE_STATUS_CODES } from "../protocol/outcome.js";
@@ -44,6 +49,15 @@ export interface ToolDeps {
   inFlight?: InFlightRegistry | undefined;
   transportStatus?: (() => Record<string, { state: string; restarts: number; recent: string[] }>) | undefined;
   retryCancels?: (() => Record<string, number>) | undefined;
+  /**
+   * Resolves a route's provider verification credentials. Live-only: a disk
+   * view has no host secret runtime.
+   *
+   * `hookdeck_setup` refuses to apply a verified route without this rather than
+   * provisioning around it — `PUT /connections` is an upsert, so a spec missing
+   * the source auth block would strip verification off a live source.
+   */
+  resolveVerification?: ((routeId: string) => Promise<Record<string, string> | undefined>) | undefined;
   now?(): number;
 }
 
@@ -345,16 +359,29 @@ export async function setupHandler(
     if (params.routeId !== undefined && routeId !== params.routeId) continue;
     if (!route.enabled) continue;
 
-    const path = `${deps.config.ingress.basePath}${route.path}`;
-    const spec = buildConnectionSpec({
-      routeId,
-      source: route.source,
-      path,
-      kind: deps.config.transport.mode === "http" ? "HTTP" : "CLI",
-      ...(deps.config.transport.publicUrl !== undefined
-        ? { url: `${deps.config.transport.publicUrl.replace(/\/+$/, "")}${path}` }
-        : {}),
-    });
+    const credentials =
+      route.verification !== undefined ? await deps.resolveVerification?.(routeId) : undefined;
+
+    // Refuse rather than provision around it. The spec is an upsert: applying
+    // one without the source auth block turns a verified source into an open
+    // endpoint, and "setup succeeded" is the last message anyone would read as
+    // a warning.
+    if (route.verification !== undefined && credentials === undefined) {
+      results.push({
+        routeId,
+        applied: false,
+        error:
+          `Route '${routeId}' configures ${route.verification.provider} verification, but its ` +
+          `credentials could not be resolved here. Applying would upsert a source with no ` +
+          `verification at all. Restart the Gateway so the service provisions it, or fix the ` +
+          `secret inputs under routes.${routeId}.verification.credentials.`,
+      });
+      continue;
+    }
+
+    const spec = buildConnectionSpec(
+      routeProvisionSpec({ config: deps.config, routeId, route, credentials }),
+    );
     const print = fingerprint(spec);
     const unchanged = deps.cursors.get(routeId)?.provisioningFingerprint === print;
 

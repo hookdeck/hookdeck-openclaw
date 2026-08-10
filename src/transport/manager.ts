@@ -1,6 +1,11 @@
 import { runCatchUp } from "../catchup.js";
 import type { HookdeckClient } from "../hookdeck/client.js";
-import { buildConnectionSpec, fingerprint, type ProvisionRouteSpec } from "../hookdeck/provision.js";
+import {
+  buildConnectionSpec,
+  fingerprint,
+  routeProvisionSpec,
+  type ProvisionRouteSpec,
+} from "../hookdeck/provision.js";
 import type { Logger } from "../ingress/handler.js";
 import type { HookdeckPluginConfig, RouteConfig } from "../plugin/config-types.js";
 import type { CursorStore } from "../store/cursor-store.js";
@@ -59,23 +64,9 @@ export function createTransportManager(deps: TransportManagerDeps): TransportMan
   async function specFor(routeId: string, route: RouteConfig): Promise<ProvisionRouteSpec> {
     const credentials =
       route.verification !== undefined ? await deps.resolveVerification?.(routeId) : undefined;
-    const path = `${config.ingress.basePath}${route.path}`;
-    return {
-      routeId,
-      source: route.source,
-      path,
-      kind: config.transport.mode === "http" ? "HTTP" : "CLI",
-      ...(config.transport.publicUrl !== undefined
-        ? { url: `${config.transport.publicUrl.replace(/\/+$/, "")}${path}` }
-        : {}),
-      ...(config.provisioning.dedupeWindowMs !== undefined
-        ? { dedupeWindowMs: config.provisioning.dedupeWindowMs }
-        : {}),
-      ...(route.verification !== undefined && credentials !== undefined
-        ? { sourceAuthType: route.verification.provider, sourceAuth: credentials }
-        : {}),
-    };
+    return routeProvisionSpec({ config, routeId, route, credentials });
   }
+
 
   /** Adopts an operator-supplied connection id, so pause and catch-up work
    * without provisioning having run. */

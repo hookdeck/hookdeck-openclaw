@@ -36,6 +36,8 @@ interface Runtime {
   cursors: CursorStore;
   transport: TransportManager;
   client?: HookdeckClient | undefined;
+  /** Shared with the setup tool so both build the same provisioning spec. */
+  resolveVerification(routeId: string): Promise<Record<string, string> | undefined>;
 }
 
 export default definePluginEntry({
@@ -178,6 +180,7 @@ export default definePluginEntry({
             logger: log,
             client: active.client,
             transportStatus: () => active.transport.status(),
+            resolveVerification: active.resolveVerification,
             retryCancels: () => Object.fromEntries(retryCancels),
             configWarnings: () => parsed.warnings,
           };
@@ -338,6 +341,33 @@ export default definePluginEntry({
 
         await ledger.prune();
 
+        // One resolver, shared by the service's provisioning and the setup
+        // tool, so the two cannot build specs that disagree about whether a
+        // source is verified.
+        const resolveVerification = async (
+          routeId: string,
+        ): Promise<Record<string, string> | undefined> => {
+          const verification = config.routes[routeId]?.verification;
+          if (verification === undefined) return undefined;
+          const out: Record<string, string> = {};
+          for (const [field, input] of Object.entries(verification.credentials)) {
+            const value = await resolveSecret(
+              input,
+              `routes.${routeId}.verification.credentials.${field}`,
+              hostSecrets,
+            );
+            if (value === undefined) {
+              log.warn(
+                `route '${routeId}': verification credential '${field}' did not resolve; ` +
+                  `provisioning will leave this source unverified`,
+              );
+              return undefined;
+            }
+            out[field] = value;
+          }
+          return out;
+        };
+
         const transport = createTransportManager({
           config,
           cursors,
@@ -350,27 +380,7 @@ export default definePluginEntry({
             return { path: all[0] ?? name, all };
           },
           readVersion: readCliVersion,
-          resolveVerification: async (routeId) => {
-            const verification = config.routes[routeId]?.verification;
-            if (verification === undefined) return undefined;
-            const out: Record<string, string> = {};
-            for (const [field, input] of Object.entries(verification.credentials)) {
-              const value = await resolveSecret(
-                input,
-                `routes.${routeId}.verification.credentials.${field}`,
-                hostSecrets,
-              );
-              if (value === undefined) {
-                log.warn(
-                  `route '${routeId}': verification credential '${field}' did not resolve; ` +
-                    `provisioning will leave this source unverified`,
-                );
-                return undefined;
-              }
-              out[field] = value;
-            }
-            return out;
-          },
+          resolveVerification,
         });
 
         runtime = {
@@ -380,6 +390,7 @@ export default definePluginEntry({
           transport,
           inFlight: createInFlightRegistry(config.maxConcurrent),
           client,
+          resolveVerification,
         };
 
         // After the ingress is live, so a catch-up replay lands on a route that

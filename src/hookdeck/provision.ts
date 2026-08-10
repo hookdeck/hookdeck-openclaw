@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { HookdeckPluginConfig, RouteConfig } from "../plugin/config-types.js";
 import { RETRYABLE_STATUS_CODES } from "../protocol/outcome.js";
 
 /**
@@ -108,6 +109,54 @@ export function buildConnectionSpec(spec: ProvisionRouteSpec): ConnectionSpec {
       config: destinationConfig,
     },
     rules,
+  };
+}
+
+/**
+ * The one place a route becomes a provisioning spec.
+ *
+ * There were two of these — one in the transport manager, one in
+ * `hookdeck_setup` — and they disagreed. The tool's copy omitted the source
+ * verification block and the dedupe rule, and since `PUT /connections` is an
+ * upsert, running setup would have *stripped provider verification off a live
+ * source*: a verified Stripe source silently becomes an open endpoint. It also
+ * made the fingerprints disagree, so the dry-run diff described a change nobody
+ * had asked for. Two builders for one wire format is the defect; the fix is
+ * that there is now one.
+ */
+export function routeProvisionSpec(options: {
+  config: HookdeckPluginConfig;
+  routeId: string;
+  route: RouteConfig;
+  /** Resolved provider credentials, when the route configures verification. */
+  credentials?: Record<string, string> | undefined;
+}): ProvisionRouteSpec {
+  const { config, routeId, route, credentials } = options;
+  const path = `${config.ingress.basePath}${route.path}`;
+  const http = config.transport.mode === "http";
+
+  return {
+    routeId,
+    source: route.source,
+    path,
+    kind: http ? "HTTP" : "CLI",
+    ...(config.transport.publicUrl !== undefined
+      ? { url: `${config.transport.publicUrl.replace(/\/+$/, "")}${path}` }
+      : {}),
+    // Hookdeck's own concurrency limit, which is strictly better than ours:
+    // it paces delivery, where local admission control answers 503 and spends
+    // one of the event's finite attempts to say "not now". Ours stays as the
+    // backstop, and is the ONLY limit under CLI transport — CLI destinations
+    // carry no `rate_limit` field at all.
+    ...(http
+      ? { rateLimit: config.maxConcurrent, rateLimitPeriod: "concurrent" as const }
+      : {}),
+    ...(config.provisioning.dedupeWindowMs !== undefined
+      ? { dedupeWindowMs: config.provisioning.dedupeWindowMs }
+      : {}),
+    ...(route.verification !== undefined && credentials !== undefined
+      ? { sourceAuthType: route.verification.provider, sourceAuth: credentials }
+      : {}),
   };
 }
 

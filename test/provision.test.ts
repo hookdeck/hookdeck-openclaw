@@ -3,8 +3,10 @@ import {
   buildConnectionSpec,
   fingerprint,
   uncoveredStatuses,
+  routeProvisionSpec,
   type ProvisionRouteSpec,
 } from "../src/hookdeck/provision.js";
+import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
 import { RETRYABLE_STATUS_CODES } from "../src/protocol/outcome.js";
 
 const cli: ProvisionRouteSpec = {
@@ -146,5 +148,62 @@ describe("uncoveredStatuses — the doctor check", () => {
   it("accepts an equivalent server range", () => {
     expect(uncoveredStatuses([...RETRYABLE_STATUS_CODES.filter((c) => c !== "500-599"), "500-599"]))
       .toEqual([]);
+  });
+});
+
+describe("we use Hookdeck's own features rather than only our local copies", () => {
+  const base = () => {
+    const parsed = parseHookdeckConfig({
+      signingSecret: "whsec",
+      maxConcurrent: 7,
+      transport: { mode: "http", publicUrl: "https://gw.example.com" },
+      routes: { stripe: { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" } } },
+    });
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.problems));
+    return parsed.config;
+  };
+
+  it("pushes maxConcurrent into the destination in HTTP mode", () => {
+    // Hookdeck paces delivery natively; local admission control has to answer
+    // 503, which spends one of the event's finite attempts to say "not now".
+    const config = base();
+    const spec = buildConnectionSpec(
+      routeProvisionSpec({ config, routeId: "stripe", route: config.routes.stripe! }),
+    );
+    const destination = spec.destination.config as Record<string, unknown>;
+    expect(destination.rate_limit).toBe(7);
+    expect(destination.rate_limit_period).toBe("concurrent");
+  });
+
+  it("omits it in CLI mode, where the field does not exist", () => {
+    const config = { ...base(), transport: { ...base().transport, mode: "cli" as const } };
+    const spec = buildConnectionSpec(
+      routeProvisionSpec({ config, routeId: "stripe", route: config.routes.stripe! }),
+    );
+    expect(spec.destination.config).not.toHaveProperty("rate_limit");
+  });
+
+  it("carries provider verification into the spec, so a source is never silently opened", () => {
+    // PUT /connections is an upsert. A spec built without the source auth
+    // block turns a verified Stripe source into an open endpoint.
+    const config = base();
+    const route = { ...config.routes.stripe!, verification: { provider: "STRIPE", credentials: {} } };
+    const spec = buildConnectionSpec(
+      routeProvisionSpec({ config, routeId: "stripe", route, credentials: { webhook_secret: "s" } }),
+    );
+    expect(spec.source.config).toMatchObject({
+      auth_type: "STRIPE",
+      auth: { webhook_secret: "s" },
+    });
+  });
+
+  it("gives the same fingerprint from either caller for the same route", () => {
+    // The setup tool and the service used to build different specs, so the
+    // dry-run diff described a change nobody had asked for.
+    const config = base();
+    const route = config.routes.stripe!;
+    const a = fingerprint(buildConnectionSpec(routeProvisionSpec({ config, routeId: "stripe", route })));
+    const b = fingerprint(buildConnectionSpec(routeProvisionSpec({ config, routeId: "stripe", route })));
+    expect(a).toBe(b);
   });
 });

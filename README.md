@@ -305,6 +305,18 @@ In both cases Hookdeck recorded a *successful* delivery, so no Issue will ever o
 
 Pre-acknowledgement rejections — a cancelled retry, a final failed attempt — are mirrored locally only as a convenience where Issues are unreachable, and are returned separately as `locallyRecorded` so a reader knows to prefer the Issue. Two cases make that mirror worth keeping: deployments with no API key, and **CLI destinations, which support no issue triggers at all** — so in local development the local log is the only record there is.
 
+### What else we let Hookdeck do
+
+Deliberately not reimplemented, listed because the temptation is real:
+
+- **Provider signature verification** (Stripe, GitHub, Shopify, ~145 others) happens at the Hookdeck Source via `verification.provider` + `credentials`. An unverified request is rejected at the Request layer, so no event is created and nothing reaches the agent. `signingSecret` is a different thing entirely — Hookdeck's own secret for signing deliveries *to us*.
+- **Retries and backoff** are the connection's retry rule. We only choose the status code that decides what it does next.
+- **Concurrency limiting** is pushed into the destination as `rate_limit_period: "concurrent"` in HTTP mode, because Hookdeck paces delivery where our local admission control has to answer `503` — spending one of the event's finite attempts to say "not now". The local limit stays as a backstop, and is the *only* control under CLI transport, where destinations carry no `rate_limit` field.
+- **Payload deduplication** of a double-firing provider is the connection's `deduplicate` rule. Our ledger solves a different problem — deciding whether an incoming *attempt* is a legitimate redelivery or a duplicate — which no server-side rule can answer for us.
+- **Holding events during a restart** is `PUT /connections/{id}/pause`; **catch-up** is bulk replay. Both are API calls, not local queues.
+
+Route `filters` are the one deliberate overlap. Hookdeck can filter server-side and doing it there is better — a filtered event never reaches the agent and costs nothing — so the local ones exist only for decisions a connection cannot express.
+
 ## Trust boundary
 
 **A valid signature authenticates the sender, not the content.** Webhook payload text is third-party input that ends up in a prompt reaching a model with tools.
@@ -329,7 +341,7 @@ npm test
 npm run typecheck
 ```
 
-431 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
+438 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, and the store suites inject write failures at an exact call to prove the degradation rule.
 
 ## Shared reliability contract
 
