@@ -70,9 +70,11 @@ npx hookdeck-cli@latest listen 18789 stripe --path /hookdeck/stripe
 
 **4. Fire a test event.** The agent wakes with the event text.
 
-### No API key required
+### No API key required to receive webhooks
 
-The plugin needs **only the signing secret**. It makes no Hookdeck API calls, so there is nothing to authenticate. The Hookdeck CLI has its own separate credential (`hookdeck login`, or guest mode with no account at all).
+Receiving needs **only the signing secret** — verification, deduplication and dispatch make no Hookdeck API calls at all. The Hookdeck CLI has its own separate credential (`hookdeck login`, or guest mode with no account at all).
+
+An `apiKey` is optional and used for exactly one thing today: re-queuing work interrupted by a crash, via `POST /events/{id}/retry`. Without one the plugin runs ingress-only — interrupted work is still detected, settled and dead-lettered, just not re-run, and the startup log says so.
 
 You do not need to configure destination auth either. CLI destinations default to `auth_type: HOOKDECK_SIGNATURE` — applied server-side, so deliveries forwarded by `hookdeck listen` carry `x-hookdeck-signature` and the full `x-hookdeck-*` header set, with the body passed through byte-for-byte. Verification therefore runs identically in local dev and production, which is the point.
 
