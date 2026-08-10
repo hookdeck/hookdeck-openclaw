@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DEFAULT_HEADER_PREFIX } from "../protocol/delivery.js";
+import { ALL_ACTIONS } from "../protocol/envelope.js";
 import type {
   ConfigParseResult,
   ConfigProblem,
@@ -26,12 +27,44 @@ const wakeDispatchSchema = z.object({
   wakeMode: z.enum(["now", "next-heartbeat"]).default("now"),
 });
 
+const filterSchema = z.object({
+  path: z.string().min(1),
+  equals: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  in: z.array(z.union([z.string(), z.number(), z.boolean()])).min(1).optional(),
+  exists: z.boolean().optional(),
+});
+
+const taskflowDispatchSchema = z.object({
+  mode: z.literal("taskflow"),
+  sessionKey: z.string().min(1),
+  controllerId: z.string().min(1).optional(),
+  allowedActions: z.array(z.enum(ALL_ACTIONS)).min(1).optional(),
+});
+
+const agentDispatchSchema = z.object({
+  mode: z.literal("agent"),
+  sessionKey: z.string().min(1),
+  prompt: z.string().min(1),
+  ackMode: z.enum(["async_retry", "sync"]).default("async_retry"),
+  syncTimeoutSeconds: z.number().int().positive().max(3600).default(45),
+  maxAgentRetries: z.number().int().nonnegative().max(50).default(3),
+  // Off by default: a webhook-triggered route must not send anything outbound,
+  // or an injected payload gains an exfiltration path.
+  deliver: z.boolean().default(false),
+  lane: z.string().min(1).optional(),
+});
+
 const routeSchema = z.object({
   enabled: z.boolean().default(true),
   path: z.string().optional(),
   source: z.string().min(1),
   signingSecret: secretInputSchema.optional(),
-  dispatch: wakeDispatchSchema,
+  dispatch: z.discriminatedUnion("mode", [
+    wakeDispatchSchema,
+    taskflowDispatchSchema,
+    agentDispatchSchema,
+  ]),
+  filters: z.array(filterSchema).optional(),
 });
 
 const configSchema = z.object({
@@ -139,12 +172,31 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       warnings.push({ path: `routes.${routeId}`, message: "route is disabled" });
     }
 
+    for (const [index, filter] of (route.filters ?? []).entries()) {
+      if (filter.equals === undefined && filter.in === undefined && filter.exists === undefined) {
+        problems.push({
+          path: `routes.${routeId}.filters.${index}`,
+          message:
+            "filter needs one of 'equals', 'in' or 'exists'; a bare path would silently match everything",
+        });
+      }
+    }
+
+    if (route.dispatch.mode === "agent" && route.dispatch.deliver) {
+      warnings.push({
+        path: `routes.${routeId}.dispatch.deliver`,
+        message:
+          "deliver is enabled on a webhook-triggered route: an injected payload could cause an outbound message",
+      });
+    }
+
     routes[routeId] = {
       enabled: route.enabled,
       path: routePath,
       source: route.source,
       ...(route.signingSecret !== undefined ? { signingSecret: route.signingSecret } : {}),
       dispatch: route.dispatch,
+      ...(route.filters !== undefined ? { filters: route.filters } : {}),
     };
   }
 

@@ -47,9 +47,10 @@ describe("createWakeDispatcher", () => {
       system,
     );
 
-    const result = await dispatcher.dispatch({ routeId: "stripe", delivery: delivery() });
+    const result = await dispatcher.dispatch({ routeId: "stripe", delivery: delivery(), payload: {} });
 
-    expect(result).toEqual({ ok: true });
+    expect(result.settle).toBe("succeeded");
+    expect(result.plan.status).toBe(200);
     expect(system.enqueueSystemEvent).toHaveBeenCalledWith("Webhook received from stripe", {
       sessionKey: "hook:stripe",
     });
@@ -60,7 +61,7 @@ describe("createWakeDispatcher", () => {
     await createWakeDispatcher(
       { mode: "wake", sessionKey: "s", wakeMode: "now" },
       system,
-    ).dispatch({ routeId: "stripe", delivery: delivery() });
+    ).dispatch({ routeId: "stripe", delivery: delivery(), payload: {} });
 
     expect(system.requestHeartbeat).toHaveBeenCalledWith({
       source: "hook",
@@ -74,7 +75,7 @@ describe("createWakeDispatcher", () => {
     await createWakeDispatcher(
       { mode: "wake", sessionKey: "s", wakeMode: "next-heartbeat" },
       system,
-    ).dispatch({ routeId: "stripe", delivery: delivery() });
+    ).dispatch({ routeId: "stripe", delivery: delivery(), payload: {} });
 
     expect(system.enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(system.requestHeartbeat).not.toHaveBeenCalled();
@@ -85,6 +86,7 @@ describe("createWakeDispatcher", () => {
     await createWakeDispatcher({ mode: "wake", sessionKey: "s" }, system).dispatch({
       routeId: "stripe",
       delivery: delivery(),
+      payload: {},
     });
     expect(system.requestHeartbeat).toHaveBeenCalledOnce();
   });
@@ -96,9 +98,11 @@ describe("createWakeDispatcher", () => {
     const result = await createWakeDispatcher({ mode: "wake", sessionKey: "s" }, system).dispatch({
       routeId: "stripe",
       delivery: delivery(),
+      payload: {},
     });
 
-    expect(result).toEqual({ ok: true, detail: "suppressed" });
+    expect(result.settle).toBe("succeeded");
+    expect(result.plan.message).toBe("suppressed");
     expect(system.requestHeartbeat).not.toHaveBeenCalled();
   });
 
@@ -111,9 +115,12 @@ describe("createWakeDispatcher", () => {
     const result = await createWakeDispatcher({ mode: "wake", sessionKey: "s" }, system).dispatch({
       routeId: "stripe",
       delivery: delivery(),
+      payload: {},
     });
 
-    expect(result).toEqual({ ok: false, retryable: true, message: "no session" });
+    expect(result.settle).toBe("failed");
+    expect(result.plan.status).toBe(503);
+    expect(result.plan.message).toBe("no session");
   });
 
   it("does not retry when only the heartbeat nudge fails", async () => {
@@ -126,8 +133,9 @@ describe("createWakeDispatcher", () => {
     const result = await createWakeDispatcher({ mode: "wake", sessionKey: "s" }, system).dispatch({
       routeId: "stripe",
       delivery: delivery(),
+      payload: {},
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.settle).toBe("succeeded");
   });
 });

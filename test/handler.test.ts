@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
 import type { HookdeckPluginConfig } from "../src/plugin/config-types.js";
-import type { DispatchContext, DispatchResult, Dispatcher } from "../src/dispatch/wake.js";
+import type { DispatchContext, DispatchOutcome, Dispatcher } from "../src/dispatch/types.js";
+import { accepted, ok as okPlan, retryable } from "../src/protocol/outcome.js";
 import {
   handleDelivery,
   writePlan,
@@ -31,14 +32,14 @@ function buildConfig(overrides: Record<string, unknown> = {}): HookdeckPluginCon
 
 interface HarnessOptions {
   config?: HookdeckPluginConfig;
-  dispatch?: (ctx: DispatchContext) => Promise<DispatchResult>;
+  dispatch?: (ctx: DispatchContext) => Promise<DispatchOutcome>;
   secret?: string | undefined;
 }
 
 function harness(options: HarnessOptions = {}) {
   const config = options.config ?? buildConfig();
-  const dispatch = vi.fn<(ctx: DispatchContext) => Promise<DispatchResult>>(
-    options.dispatch ?? (async () => ({ ok: true })),
+  const dispatch = vi.fn<(ctx: DispatchContext) => Promise<DispatchOutcome>>(
+    options.dispatch ?? (async () => ({ settle: "succeeded", plan: okPlan("dispatched") })),
   );
   const dispatcher: Dispatcher = { dispatch };
   const ledger = createMemoryLedger({ ttlHours: config.dedupe.ttlHours, instanceId: "test" });
@@ -242,7 +243,7 @@ describe("handleDelivery — deduplication", () => {
     // The case that a naive event-id dedupe would break: Hookdeck retries a
     // failed event under the same id.
     const { deps, dispatch } = harness({
-      dispatch: async () => ({ ok: false, retryable: true, message: "boom" }),
+      dispatch: async () => ({ settle: "failed" as const, plan: retryable(503, "dispatch_failed", "boom") }),
     });
     const first = await handleDelivery(deps, request({ attemptCount: "1" }));
     expect(first.plan.status).toBe(503);
@@ -284,7 +285,7 @@ describe("handleDelivery — admission control", () => {
       config,
       dispatch: async () => {
         await blocked;
-        return { ok: true };
+        return { settle: "succeeded" as const, plan: okPlan("dispatched") };
       },
     });
     // Share the registry so both handlers contend for the same capacity.
@@ -316,7 +317,7 @@ describe("handleDelivery — admission control", () => {
       config,
       dispatch: async () => {
         await blocked;
-        return { ok: true };
+        return { settle: "succeeded" as const, plan: okPlan("dispatched") };
       },
     });
     slow.deps.inFlight = deps.inFlight;
@@ -459,7 +460,7 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
 
   it("returns a retryable 503 when dispatch fails transiently", async () => {
     const { deps, ledger } = harness({
-      dispatch: async () => ({ ok: false, retryable: true, message: "queue unavailable" }),
+      dispatch: async () => ({ settle: "failed" as const, plan: retryable(503, "dispatch_failed", "queue unavailable") }),
     });
     const result = await handleDelivery(deps, request());
     expect(result.plan.status).toBe(503);
@@ -470,7 +471,7 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
     // Do NOT flip to 2xx to keep the dashboard green — the failure is what
     // opens a Hookdeck Issue, and the Issue is the operator's alert.
     const { deps } = harness({
-      dispatch: async () => ({ ok: false, retryable: true, message: "still broken" }),
+      dispatch: async () => ({ settle: "failed" as const, plan: retryable(503, "dispatch_failed", "still broken") }),
     });
     const result = await handleDelivery(
       deps,
@@ -481,10 +482,76 @@ describe("handleDelivery — payload and dispatch outcomes", () => {
   });
 
   it("reports a suppressed wake as success rather than retrying it", async () => {
-    const { deps } = harness({ dispatch: async () => ({ ok: true, detail: "suppressed" }) });
+    const { deps } = harness({
+      dispatch: async () => ({ settle: "succeeded", plan: okPlan("dispatched", "suppressed") }),
+    });
     const result = await handleDelivery(deps, request());
     expect(result.plan.status).toBe(200);
     expect(result.plan.message).toBe("suppressed");
+  });
+
+  it("does NOT settle the ledger when the dispatcher defers", async () => {
+    // `deferred` means a background run owns the row. Settling here would tell
+    // the next boot the work completed and leave a crash mid-run unrecovered.
+    const { deps, ledger } = harness({
+      dispatch: async () => ({ settle: "deferred", plan: accepted("accepted") }),
+    });
+    const result = await handleDelivery(deps, request());
+
+    expect(result.plan.status).toBe(202);
+    expect(ledger.get("evt_1")?.status).toBe("running");
+    expect(ledger.listOrphans()).toHaveLength(0); // ours, not an orphan
+  });
+});
+
+describe("handleDelivery — route filters", () => {
+  function filtered(filters: unknown) {
+    return buildConfig({
+      routes: {
+        stripe: { source: "stripe", dispatch: { mode: "wake", sessionKey: "main" }, filters },
+      },
+    });
+  }
+
+  it("drops a non-matching payload with 200, so Hookdeck retires the event", async () => {
+    const { deps, dispatch } = harness({
+      config: filtered([{ path: "type", equals: "invoice.paid" }]),
+    });
+    const result = await handleDelivery(deps, request({ body: '{"type":"charge.failed"}' }));
+
+    expect(result.plan.status).toBe(200);
+    expect(result.plan.code).toBe("ignored");
+    expect(result.extra).toMatchObject({ ignored: true });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a matching payload", async () => {
+    const { deps, dispatch } = harness({
+      config: filtered([{ path: "type", equals: "invoice.paid" }]),
+    });
+    await handleDelivery(deps, request({ body: '{"type":"invoice.paid"}' }));
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("requires every filter to pass", async () => {
+    const { deps, dispatch } = harness({
+      config: filtered([
+        { path: "type", equals: "invoice.paid" },
+        { path: "livemode", equals: true },
+      ]),
+    });
+    await handleDelivery(deps, request({ body: '{"type":"invoice.paid","livemode":false}' }));
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not write a ledger row for a filtered event", async () => {
+    // A filtered drop is not work; recording it would make a later redelivery
+    // of a payload we now DO want look like a duplicate.
+    const { deps, ledger } = harness({
+      config: filtered([{ path: "type", equals: "invoice.paid" }]),
+    });
+    await handleDelivery(deps, request({ body: '{"type":"charge.failed"}' }));
+    expect(ledger.get("evt_1")).toBeUndefined();
   });
 });
 

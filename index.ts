@@ -7,8 +7,12 @@ import type { HookdeckPluginConfig, RouteConfig } from "./src/plugin/config-type
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "./src/plugin/host-api.js";
 import { createHostSecretResolver } from "./src/plugin/host-secrets.js";
 import { resolveSecret, UnresolvedSecretError } from "./src/plugin/secrets.js";
-import { createWakeDispatcher, type Dispatcher } from "./src/dispatch/wake.js";
-import { createHookdeckClient } from "./src/hookdeck/client.js";
+import { createAgentDispatcher } from "./src/dispatch/agent.js";
+import { createTaskFlowRunner } from "./src/dispatch/runners.js";
+import { createTaskFlowDispatcher } from "./src/dispatch/taskflow.js";
+import type { Dispatcher } from "./src/dispatch/types.js";
+import { createWakeDispatcher } from "./src/dispatch/wake.js";
+import { createHookdeckClient, type HookdeckClient } from "./src/hookdeck/client.js";
 import { handleDelivery, writePlan, type Logger } from "./src/ingress/handler.js";
 import { deferFor, retryable } from "./src/protocol/outcome.js";
 import { reconcileOrphans } from "./src/recovery.js";
@@ -23,6 +27,7 @@ interface Runtime {
   ledger: Ledger;
   deadLetter: DeadLetterLog;
   inFlight: InFlightRegistry;
+  client?: HookdeckClient | undefined;
 }
 
 export default definePluginEntry({
@@ -79,11 +84,66 @@ export default definePluginEntry({
 
     const dispatchers = new Map<string, Dispatcher>();
     const dispatcherFor = (routeId: string, route: RouteConfig): Dispatcher => {
-      let dispatcher = dispatchers.get(routeId);
-      if (dispatcher === undefined) {
-        dispatcher = createWakeDispatcher(route.dispatch, api.runtime.system);
-        dispatchers.set(routeId, dispatcher);
+      const existing = dispatchers.get(routeId);
+      if (existing !== undefined) return existing;
+
+      const active = runtime;
+      if (active === undefined) throw new Error("dispatcher requested before service start");
+
+      let dispatcher: Dispatcher;
+      switch (route.dispatch.mode) {
+        case "wake":
+          dispatcher = createWakeDispatcher(route.dispatch, api.runtime.system);
+          break;
+
+        case "taskflow": {
+          const { sessionKey, controllerId, allowedActions } = route.dispatch;
+          dispatcher = createTaskFlowDispatcher(
+            {
+              controllerId: controllerId ?? `hookdeck/${routeId}`,
+              ...(allowedActions !== undefined ? { allowedActions } : {}),
+              hostConfig,
+            },
+            // Bound per dispatch rather than captured: the host resolves flow
+            // state against the live session each time.
+            () => api.runtime.tasks.managedFlows.bindSession({ sessionKey }),
+          );
+          break;
+        }
+
+        case "agent": {
+          const d = route.dispatch;
+          dispatcher = createAgentDispatcher(
+            {
+              sessionKey: d.sessionKey,
+              prompt: d.prompt,
+              ackMode: d.ackMode ?? "async_retry",
+              syncTimeoutSeconds: d.syncTimeoutSeconds ?? 45,
+              maxAgentRetries: d.maxAgentRetries ?? 3,
+              deliver: d.deliver ?? false,
+              ...(d.lane !== undefined ? { lane: d.lane } : {}),
+              maxConcurrentRuns: config.maxConcurrent,
+              busyRetryAfterSeconds: config.busyRetryAfterSeconds,
+            },
+            {
+              // TaskFlow run_task rather than subagent.run: a plugin-auth
+              // route carries no operator scopes, so subagent.run is refused
+              // with `missing scope: operator.write`. See dispatch/runners.ts.
+              runner: createTaskFlowRunner({
+                controllerId: `hookdeck/${routeId}`,
+                bind: (sessionKey) => api.runtime.tasks.managedFlows.bindSession({ sessionKey }),
+              }),
+              ledger: active.ledger,
+              deadLetter: active.deadLetter,
+              logger: log,
+              client: active.client,
+            },
+          );
+          break;
+        }
       }
+
+      dispatchers.set(routeId, dispatcher);
       return dispatcher;
     };
 
@@ -212,6 +272,7 @@ export default definePluginEntry({
           ledger,
           deadLetter,
           inFlight: createInFlightRegistry(config.maxConcurrent),
+          client,
         };
 
         const routes = Object.entries(config.routes).filter(([, r]) => r.enabled);
@@ -237,6 +298,9 @@ export default definePluginEntry({
         const active = runtime;
         runtime = undefined;
         hostConfig = undefined;
+        // Dispatchers capture the previous lifetime's ledger and client, so a
+        // restart must not reuse them.
+        dispatchers.clear();
         if (active === undefined) return;
 
         // Compacts on the way out, so the next boot loads a clean file.

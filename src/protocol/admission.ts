@@ -34,6 +34,8 @@ export interface LedgerRow {
    */
   owner?: string;
   routeId?: string;
+  /** Times we have asked Hookdeck to redeliver after a failed agent run. */
+  agentRetries?: number;
 }
 
 export type AdmissionDecision =

@@ -12,7 +12,8 @@ import {
   type ResponsePlan,
 } from "../protocol/outcome.js";
 import { verifyHookdeckSignature } from "../protocol/signature.js";
-import type { Dispatcher } from "../dispatch/wake.js";
+import type { Dispatcher } from "../dispatch/types.js";
+import { evaluateFilters } from "../protocol/filters.js";
 import type { DeadLetterLog } from "../store/deadletter.js";
 import type { InFlightRegistry } from "../store/in-flight.js";
 import type { Ledger } from "../store/ledger.js";
@@ -272,30 +273,37 @@ async function runPipeline(
       );
     }
 
-    // 11. Dispatch, bracketed by ledger writes. `begin` is awaited: it is the
-    //     boundary before which we must not acknowledge anything.
-    await deps.ledger.begin(eventId, delivery.attemptCount ?? 1, { routeId });
-    const result = await deps
-      .dispatcherFor(routeId, route)
-      .dispatch({ routeId, delivery, payload });
-
-    if (result.ok) {
-      await deps.ledger.settle(eventId, "succeeded");
+    // 11. Route filters. A non-match is a deliberate drop, and a 2xx correctly
+    //     retires the event rather than leaving Hookdeck retrying something we
+    //     will never accept.
+    const filtered = evaluateFilters(route.filters, payload);
+    if (!filtered.matched) {
+      logger.debug(`route '${routeId}': filtered out ${eventId} (${filtered.reason})`);
       return {
-        plan: ok("dispatched", result.detail),
-        extra: { eventId },
+        plan: ok("ignored", filtered.reason),
+        extra: { ignored: true, eventId },
         routeId,
         delivery,
       };
     }
 
-    await deps.ledger.settle(eventId, "failed");
+    // 12. Dispatch, bracketed by ledger writes. `begin` is awaited: it is the
+    //     boundary before which we must not acknowledge anything.
+    await deps.ledger.begin(eventId, delivery.attemptCount ?? 1, { routeId });
+    const outcome = await deps
+      .dispatcherFor(routeId, route)
+      .dispatch({ routeId, delivery, payload });
+
+    // `deferred` means the dispatcher took ownership and settles the row itself
+    // when its background run finishes. Settling here would tell the next boot
+    // the work completed, leaving a crash mid-run unrecovered.
+    if (outcome.settle !== "deferred") {
+      await deps.ledger.settle(eventId, outcome.settle);
+    }
+
     return {
-      // Both branches leave pacing to the connection's exponential rule: a
-      // dispatch failure that repeats is exactly the case a fixed short
-      // interval would burn through.
-      plan: retryable(result.retryable ? 503 : 500, "dispatch_failed", result.message),
-      extra: { eventId, lastAttempt: delivery.isLastAutomaticAttempt },
+      plan: outcome.plan,
+      extra: { eventId, ...(delivery.isLastAutomaticAttempt ? { lastAttempt: true } : {}) },
       routeId,
       delivery,
     };

@@ -3,7 +3,8 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { parseHookdeckConfig } from "../src/plugin/config-parse.js";
-import type { DispatchContext, DispatchResult } from "../src/dispatch/wake.js";
+import type { DispatchContext, DispatchOutcome } from "../src/dispatch/types.js";
+import { ok as okPlan } from "../src/protocol/outcome.js";
 import { handleDelivery, writePlan, type HandlerDeps } from "../src/ingress/handler.js";
 import { computeHookdeckSignature } from "../src/protocol/signature.js";
 import { createInFlightRegistry } from "../src/store/in-flight.js";
@@ -31,8 +32,9 @@ const config = parsed.config;
 
 let server: Server;
 let baseUrl: string;
-const dispatch = vi.fn<(ctx: DispatchContext) => Promise<DispatchResult>>(async () => ({
-  ok: true,
+const dispatch = vi.fn<(ctx: DispatchContext) => Promise<DispatchOutcome>>(async () => ({
+  settle: "succeeded",
+  plan: okPlan("dispatched"),
 }));
 
 beforeAll(async () => {

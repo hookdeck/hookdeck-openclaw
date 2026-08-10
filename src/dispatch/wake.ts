@@ -1,5 +1,6 @@
 import type { WakeDispatchConfig } from "../plugin/config-types.js";
-import type { HookdeckDelivery } from "../protocol/delivery.js";
+import { ok, retryable } from "../protocol/outcome.js";
+import type { DispatchContext, DispatchOutcome, Dispatcher } from "./types.js";
 
 /**
  * Wake dispatch: enqueue a system event, optionally requesting an immediate
@@ -28,21 +29,6 @@ export interface SystemRuntime {
   }): void;
 }
 
-export interface DispatchContext {
-  routeId: string;
-  delivery: HookdeckDelivery;
-  /** Parsed body, when it parsed. Wake dispatch does not require it. */
-  payload?: unknown;
-}
-
-export type DispatchResult =
-  | { ok: true; detail?: string }
-  | { ok: false; retryable: boolean; message: string };
-
-export interface Dispatcher {
-  dispatch(ctx: DispatchContext): Promise<DispatchResult>;
-}
-
 const DEFAULT_TEXT = "Webhook received from {source}";
 
 /** Placeholder substitution, deliberately not a template engine. */
@@ -61,7 +47,7 @@ export function createWakeDispatcher(
   system: SystemRuntime,
 ): Dispatcher {
   return {
-    async dispatch(ctx) {
+    async dispatch(ctx: DispatchContext): Promise<DispatchOutcome> {
       const text = renderWakeText(config.text ?? DEFAULT_TEXT, {
         routeId: ctx.routeId,
         source: ctx.delivery.sourceName,
@@ -75,9 +61,8 @@ export function createWakeDispatcher(
         // A throw here is an infrastructure problem, not bad input — keep the
         // event alive in Hookdeck so it lands after the operator fixes it.
         return {
-          ok: false,
-          retryable: true,
-          message: err instanceof Error ? err.message : String(err),
+          settle: "failed",
+          plan: retryable(503, "wake_failed", err instanceof Error ? err.message : String(err)),
         };
       }
 
@@ -85,7 +70,7 @@ export function createWakeDispatcher(
         // `enqueueSystemEvent` returns false for empty text or duplicate
         // suppression. Both mean "this event will not wake anything", and
         // neither improves on retry.
-        return { ok: true, detail: "suppressed" };
+        return { settle: "succeeded", plan: ok("dispatched", "suppressed") };
       }
 
       if ((config.wakeMode ?? "now") === "now") {
@@ -99,11 +84,14 @@ export function createWakeDispatcher(
           // The event is already queued; failing to nudge the heartbeat only
           // delays it to the next tick. Not worth a retry, which would
           // re-enqueue and duplicate.
-          return { ok: true, detail: `enqueued; heartbeat request failed: ${String(err)}` };
+          return {
+            settle: "succeeded",
+            plan: ok("dispatched", `enqueued; heartbeat request failed: ${String(err)}`),
+          };
         }
       }
 
-      return { ok: true };
+      return { settle: "succeeded", plan: ok("dispatched") };
     },
   };
 }

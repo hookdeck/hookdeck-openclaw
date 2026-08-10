@@ -249,38 +249,178 @@
               ]
             },
             "dispatch": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "mode",
-                "sessionKey"
-              ],
-              "properties": {
-                "mode": {
-                  "type": "string",
-                  "enum": [
-                    "wake"
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "sessionKey"
                   ],
-                  "description": "Dispatch mode. 'taskflow' and 'agent' land in a later release."
+                  "properties": {
+                    "mode": {
+                      "const": "wake"
+                    },
+                    "sessionKey": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Session the system event is enqueued against. Required \u2014 enqueueSystemEvent throws without one."
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "System event text. Placeholders: {source}, {eventId}, {routeId}."
+                    },
+                    "wakeMode": {
+                      "type": "string",
+                      "enum": [
+                        "now",
+                        "next-heartbeat"
+                      ],
+                      "default": "now",
+                      "description": "'now' also requests an immediate heartbeat; 'next-heartbeat' only enqueues."
+                    }
+                  }
                 },
-                "sessionKey": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Session the system event is enqueued against. Required \u2014 enqueueSystemEvent throws without one."
-                },
-                "text": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "System event text. Placeholders: {source}, {eventId}, {routeId}."
-                },
-                "wakeMode": {
-                  "type": "string",
-                  "enum": [
-                    "now",
-                    "next-heartbeat"
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "sessionKey"
                   ],
-                  "default": "now",
-                  "description": "'now' also requests an immediate heartbeat; 'next-heartbeat' only enqueues."
+                  "properties": {
+                    "mode": {
+                      "const": "taskflow"
+                    },
+                    "sessionKey": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Session the flows are bound to. Flow state is scoped to it."
+                    },
+                    "controllerId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Identifies flows this route manages. Defaults to hookdeck/<routeId>."
+                    },
+                    "allowedActions": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "get_flow",
+                          "list_flows",
+                          "find_latest_flow",
+                          "resolve_flow",
+                          "get_task_summary",
+                          "create_flow",
+                          "run_task",
+                          "set_waiting",
+                          "resume_flow",
+                          "finish_flow",
+                          "fail_flow",
+                          "request_cancel",
+                          "cancel_flow"
+                        ]
+                      },
+                      "description": "When set, only these actions are accepted on this route."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "sessionKey",
+                    "prompt"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "agent"
+                    },
+                    "sessionKey": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Supports {routeId}, {eventId}, {source}; sanitised to a safe alphabet."
+                    },
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Prompt template. Placeholders such as {{payload.type}} are substituted as JSON, never as bare prose, so a payload cannot break out into instruction position."
+                    },
+                    "ackMode": {
+                      "type": "string",
+                      "enum": [
+                        "async_retry",
+                        "sync"
+                      ],
+                      "default": "async_retry",
+                      "description": "async_retry acknowledges 202 and runs in the background, asking Hookdeck to redeliver on failure. sync holds the response, degrading to 202 on timeout."
+                    },
+                    "syncTimeoutSeconds": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 3600,
+                      "default": 45
+                    },
+                    "maxAgentRetries": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 50,
+                      "default": 3,
+                      "description": "Redeliveries requested after a failed run before the event is marked exhausted."
+                    },
+                    "deliver": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Whether the agent's reply is delivered to a messaging channel. Off by default: a webhook-triggered route must not send anything outbound, or an injected payload gains a way out."
+                    },
+                    "lane": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              ]
+            },
+            "filters": {
+              "type": "array",
+              "description": "Payload filters; all must pass. A non-match is answered 200, since the drop is deliberate. Prefer filtering at the Hookdeck connection where you can.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Dotted path into the payload."
+                  },
+                  "equals": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "in": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "exists": {
+                    "type": "boolean"
+                  }
                 }
               }
             }

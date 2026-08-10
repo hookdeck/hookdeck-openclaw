@@ -9,6 +9,10 @@
  * runtime. SecretRefs are re-resolved per use, never cached, so rotating a
  * secret takes effect without restarting the Gateway.
  */
+import type { RouteFilter } from "../protocol/filters.js";
+
+export type { RouteFilter };
+
 export type SecretInput =
   | string
   | { source: "env" | "file" | "exec"; provider: string; id: string };
@@ -32,8 +36,36 @@ export interface WakeDispatchConfig {
   wakeMode?: "now" | "next-heartbeat";
 }
 
-/** Additional modes (`taskflow`, `agent`) land in M3. */
-export type DispatchConfig = WakeDispatchConfig;
+export interface TaskFlowDispatchConfig {
+  mode: "taskflow";
+  /** Session the flows are bound to. Flow state is scoped to it. */
+  sessionKey: string;
+  /** Identifies flows this route manages. Defaults to `hookdeck/<routeId>`. */
+  controllerId?: string;
+  /** When set, only these actions are accepted on this route. */
+  allowedActions?: string[];
+}
+
+export interface AgentDispatchConfig {
+  mode: "agent";
+  /** Supports `{routeId}`, `{eventId}`, `{source}`; sanitised to a safe alphabet. */
+  sessionKey: string;
+  /**
+   * Prompt template. Placeholders (`{{payload.type}}`, `{{source}}`, …) are
+   * substituted as JSON, never as bare prose — see the trust boundary note in
+   * `protocol/template.ts`.
+   */
+  prompt: string;
+  ackMode?: "async_retry" | "sync";
+  syncTimeoutSeconds?: number;
+  /** Redeliveries requested after a failed run before marking it exhausted. */
+  maxAgentRetries?: number;
+  /** Off by default: a webhook-triggered route must not send anything outbound. */
+  deliver?: boolean;
+  lane?: string;
+}
+
+export type DispatchConfig = WakeDispatchConfig | TaskFlowDispatchConfig | AgentDispatchConfig;
 
 export interface RouteConfig {
   enabled: boolean;
@@ -44,6 +76,14 @@ export interface RouteConfig {
   /** Overrides the top-level signing secret for this route. */
   signingSecret?: SecretInput;
   dispatch: DispatchConfig;
+  /**
+   * Payload filters; all must pass. A non-match is answered 200, because the
+   * drop is deliberate and a 2xx correctly retires the event.
+   *
+   * Prefer filtering at the Hookdeck connection where you can: an event
+   * filtered there never reaches the agent and costs nothing.
+   */
+  filters?: RouteFilter[];
 }
 
 export interface SafetyConfig {

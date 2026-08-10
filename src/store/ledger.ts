@@ -26,7 +26,7 @@ export interface Ledger {
   get(eventId: string): LedgerRow | undefined;
   /** Records the start of a dispatch. Called only after admission succeeds. */
   begin(eventId: string, attempt: number, meta?: { routeId?: string }): Promise<LedgerRow>;
-  settle(eventId: string, status: LedgerStatus): Promise<void>;
+  settle(eventId: string, status: LedgerStatus, patch?: { agentRetries?: number }): Promise<void>;
   /**
    * `running` rows owned by a previous process instance. Each represents work
    * whose outcome we do not know, because the process that owned it died
@@ -103,10 +103,15 @@ function buildLedger(store: JsonlStore<LedgerRow>, options: LedgerOptions): Ledg
       return row;
     },
 
-    async settle(eventId, status) {
+    async settle(eventId, status, patch) {
       const existing = store.get(eventId);
       if (existing === undefined) return;
-      await store.put({ ...existing, status, updatedAt: now() });
+      await store.put({
+        ...existing,
+        status,
+        updatedAt: now(),
+        ...(patch?.agentRetries !== undefined ? { agentRetries: patch.agentRetries } : {}),
+      });
     },
 
     listOrphans() {

@@ -38,7 +38,7 @@ export const CANCEL_REASONS = [
   "malformed_json",
   "invalid_envelope",
   "forbidden_action",
-  "flow_not_found_exhausted",
+  "flow_revision_conflict",
   "flow_not_managed",
   "agent_input_invalid",
   "signature_cancel_mode",
