@@ -70,8 +70,8 @@ export function createTaskFlowRunner(
     },
     // Deliberately no `waitFor`: TaskFlow exposes flow state, not a completion
     // promise. Claiming to observe completion would mean polling and guessing,
-    // and the shared contract is explicit that a host without a completion hook
-    // should say so rather than fake it.
+    // and a host that cannot observe it should say so rather than fake it —
+    // the dispatcher then acknowledges honestly instead of pretending to wait.
   };
 }
 

@@ -2,7 +2,7 @@
 
 Reliable webhooks for OpenClaw. Puts the [Hookdeck](https://hookdeck.com) Event Gateway in front of your OpenClaw Gateway so inbound webhooks are verified, deduplicated and retryable.
 
-> **Status: pre-1.0.** Signature verification, durable deduplication, crash recovery, dead-lettering, route filters, all three dispatch modes, connection provisioning, CLI supervision, pause-on-shutdown, outage catch-up and the agent-facing tools are implemented — see [Limitations](#limitations) for what remains. Nothing below describes behaviour that isn't implemented.
+> **Status: pre-1.0.** Signature verification, durable deduplication, crash recovery, dead-lettering, route filters, all three dispatch modes, connection provisioning, CLI supervision, pause-on-shutdown, outage catch-up and the agent-facing tools are implemented — see [Limitations](#limitations) for what remains.
 
 ## Why
 
@@ -78,7 +78,7 @@ An `apiKey` is optional. Without one the plugin runs ingress-only: verification,
 
 You do not need to configure destination auth either. CLI destinations default to `auth_type: HOOKDECK_SIGNATURE` — applied server-side, so deliveries forwarded by `hookdeck listen` carry `x-hookdeck-signature` and the full `x-hookdeck-*` header set, with the body passed through byte-for-byte. Verification therefore runs identically in local dev and production, which is the point.
 
-> This is not stated in Hookdeck's docs, which is a documentation gap rather than a caveat. Note also that CLI destination auth is API-only — the dashboard's destination editor exposes an Authentication dropdown for HTTP and Mock API destinations but only "CLI Path" for CLI ones. The default still applies.
+> CLI destination auth is API-only: the dashboard's destination editor exposes an Authentication dropdown for HTTP and Mock API destinations, but only "CLI Path" for CLI ones. The default still applies.
 
 **If local deliveries are rejected with `401`, the likely cause is a project mismatch, not missing headers.** The signing secret is per-project, so a secret from one project will not verify traffic from another. Check the CLI is logged into the same project the secret came from.
 
@@ -265,7 +265,7 @@ Without `apiKey`, orphans are still detected, settled and dead-lettered — they
 
 ## Agent tools
 
-Eight tools: the shared contract's five operator verbs — `setup`, `status`, `pause`/`resume`, `replay`, `doctor` — plus three an agent host benefits from more than a CLI does. Two of those correlate what Hookdeck saw with what we did (`hookdeck_recent_deliveries`, `hookdeck_inspect_event`); the third, `hookdeck_issues`, is the dead-letter queue's own lifecycle.
+Eight tools. Five are the operator verbs — `setup`, `status`, `pause`/`resume`, `replay`, `doctor` — plus three an agent host benefits from more than a CLI does. Two of those correlate what Hookdeck saw with what we did (`hookdeck_recent_deliveries`, `hookdeck_inspect_event`); the third, `hookdeck_issues`, is the dead-letter queue's own lifecycle.
 
 | Tool | Answers |
 |---|---|
@@ -377,12 +377,6 @@ npm run typecheck
 ```
 
 613 tests, no Gateway or Hookdeck account required. Signature vectors are computed independently with `openssl`, `test/http-integration.test.ts` exercises the pipeline over a real socket including multi-byte UTF-8 and multi-chunk bodies, the store suites inject write failures at an exact call to prove the degradation rule, and `test/store-io.test.ts` runs against a real filesystem because that is the only place durability actually lives.
-
-## Shared reliability contract
-
-This plugin conforms to a contract shared across Hookdeck's agent-platform plugins, so that "what happens when the run fails" has the same answer in each: the same verification rule, the same attempt-count deduplication, the same admission-control semantics, and the same operator verbs.
-
-Where this plugin adds something the contract does not require — retry cancellation, last-attempt dead-lettering — it defaults to off, so out-of-the-box wire behaviour matches its siblings.
 
 ## License
 

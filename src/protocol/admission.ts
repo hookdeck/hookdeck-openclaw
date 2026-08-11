@@ -1,5 +1,5 @@
 /**
- * Deduplication, per the shared reliability contract (§3).
+ * Deduplication.
  *
  * The trap this rule exists to avoid: Hookdeck redelivers a FAILED event under
  * the SAME event id. So deduplicating on event id alone blocks every legitimate

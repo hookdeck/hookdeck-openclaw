@@ -14,10 +14,10 @@ import { statusHandler } from "./status.js";
 /**
  * Registers the operator surface as agent tools.
  *
- * The five verbs match the shared reliability contract — `setup`, `status`,
- * `pause`/`resume`, `replay`, `doctor` — so someone who learns one plugin
- * already knows the others. Two additional read tools exist because an agent
- * host benefits from correlated triage in a way a CLI does not.
+ * Five operator verbs — `setup`, `status`, `pause`/`resume`, `replay`,
+ * `doctor` — named the same way across Hookdeck's agent-platform plugins, so
+ * learning one teaches the others. Three more exist because an agent host
+ * benefits from correlated triage in a way a CLI does not.
  *
  * `tools.allowMutations: false` reduces the surface to the read tools, for
  * operators who want an agent that can diagnose but not act.

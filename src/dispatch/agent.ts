@@ -19,7 +19,7 @@ import type { DispatchContext, DispatchOutcome, Dispatcher } from "./types.js";
  * day one, because it needs no payload shaping — a raw Stripe body is not a
  * TaskFlow envelope and never will be.
  *
- * Two acknowledgement modes, named to match the shared reliability contract:
+ * Two acknowledgement modes:
  *
  *  - `async_retry` (default): acknowledge 202 once admitted, run in the
  *    background, and on failure ask Hookdeck to redeliver. Retry state lives in
