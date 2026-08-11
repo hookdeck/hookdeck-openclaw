@@ -108,7 +108,10 @@ export interface HookdeckAttempt {
 
 export interface HookdeckClient {
   /**
-   * Manually retry an event.
+   * Retries an event: a new delivery attempt for the SAME event, keeping its
+   * id and incrementing its attempt count. Not a replay — `POST
+   * /events/{id}/replay` re-ingests the request and mints new event ids, which
+   * deduplication cannot relate to the original.
    *
    * Works on events Hookdeck already considers SUCCESSFUL — confirmed against a
    * live project, where an event with three `202` attempts still accepted two

@@ -234,9 +234,11 @@ export function registerHookdeckTools(
         name: "hookdeck_replay",
         label: "Hookdeck Replay",
         description:
-          "Re-delivers events. Pass eventIds to retry specific events, or routeId plus sinceMinutes for a " +
-          "scoped bulk replay of requests nothing was listening for. Bulk replay is a dry run unless " +
-          "confirm is true, because an unscoped replay costs real money.",
+          "Re-delivers events, two different ways. eventIds RETRIES those events: same event, a new " +
+          "delivery attempt, ids unchanged. routeId plus sinceMinutes REPLAYS the requests that arrived " +
+          "while nothing was listening, which re-ingests them and creates NEW events with new ids — so " +
+          "deduplication cannot recognise them and any work they trigger runs again. Replay is a dry run " +
+          "unless confirm is true.",
         parameters: Type.Object({
           eventIds: Type.Optional(Type.Array(Type.String())),
           routeId: Type.Optional(Type.String()),

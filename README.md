@@ -275,12 +275,12 @@ Eight tools: the shared contract's five operator verbs — `setup`, `status`, `p
 | `hookdeck_doctor` | What's misconfigured, including whether each connection's retry rule still covers every status we emit |
 | `hookdeck_setup` | Provisions connections. Dry run by default |
 | `hookdeck_pause` | Pause/resume a connection. Auto-resumes within an hour |
-| `hookdeck_replay` | Retry specific events, or a scoped bulk replay. Dry run unless `confirm: true`. Caps at 100 ids per call and says what it dropped |
+| `hookdeck_replay` | **Retries** specific events (`eventIds`), or runs a scoped bulk **replay** of requests (`routeId` + `sinceMinutes`). Dry run unless `confirm: true`. Caps at 100 ids per call and says what it dropped |
 | `hookdeck_issues` | The dead-letter queue's lifecycle: list, acknowledge, resolve, ignore, dismiss. Replays nothing, and says so |
 
 `tools.allowMutations: false` reduces this to the five read tools — `hookdeck_issues` stays, able to list and inspect but not acknowledge, resolve or dismiss — for an agent that can diagnose but not act.
 
-Four safety rails are deliberate. **`hookdeck_setup` defaults to a dry run**, so an agent has to mean it. **`hookdeck_replay` refuses a filtered replay without `confirm: true`**, because an unscoped retry-everything costs real money. **`hookdeck_pause` always schedules an auto-resume**, clamped to an hour, because an agent that pauses and then loses the thread must not stop the pipeline indefinitely. And **every `hookdeck_issues` mutation states that it replayed nothing** — "resolved" reads like "fixed", and an agent that resolves without replaying has tidied the dashboard and left the work undone.
+Four safety rails are deliberate. **`hookdeck_setup` defaults to a dry run**, so an agent has to mean it. **`hookdeck_replay` refuses a bulk replay without `confirm: true`**, because replaying an unscoped window costs real money. **`hookdeck_pause` always schedules an auto-resume**, clamped to an hour, because an agent that pauses and then loses the thread must not stop the pipeline indefinitely. And **every `hookdeck_issues` mutation states that it replayed nothing** — "resolved" reads like "fixed", and an agent that resolves without replaying has tidied the dashboard and left the work undone.
 
 Deliberately absent: `disable`, any delete, raw source/destination CRUD, transformation overwrite. Their failure mode is irrecoverable event loss and an agent cannot judge the blast radius.
 
@@ -296,6 +296,24 @@ Each result carries `source: "live" | "disk"`. On a disk view, in-flight capacit
 > 2. **The `AgentTool` contract**: a required `label`, an `execute(toolCallId, params, …)` signature, and an `AgentToolResult` return (use `jsonResult` from `openclaw/plugin-sdk/core`). Get any of these wrong and the host accepts the registration while the agent never sees the tool.
 >
 > Neither failure is visible to a typecheck or to handler-level tests, so `test/tool-wiring.test.ts` asserts the manifest matches the code, every tool has a label, the execute arity is right, and the return is an `AgentToolResult`.
+
+### Retry and replay are different operations
+
+Hookdeck distinguishes them, so this plugin does too:
+
+- **Retry** (`POST /events/{id}/retry`) makes a new delivery attempt for an existing event. The event id is unchanged and the attempt count goes up.
+- **Replay** (`POST /bulk/requests/replay`) re-ingests the original *requests* through the pipeline, producing **new events with new ids**. The originals are untouched.
+
+Almost everything here is a retry: crash recovery re-queuing interrupted work, an agent run asking for another delivery, and `hookdeck_replay` when given explicit `eventIds`. Only catch-up after an outage is a true replay, because the events it needs never existed — the requests arrived while no CLI session was attached, so Hookdeck discarded them rather than creating events to retry.
+
+That distinction decides whether deduplication can protect you:
+
+| | Ledger sees | Suppressed? |
+|---|---|---|
+| Retry | Same event id, higher attempt | Admitted by the attempt rule, and a duplicate of an already-handled attempt is rejected |
+| Replay | A brand-new event id | Admitted as a first delivery — **the ledger has no way to know it is related to anything** |
+
+So a replay of requests that already ran successfully **will run the work again**. That is why every replay path here is scoped to requests that produced no event at all (`cli_events_count: 0`, `ignored_count >= 1`) rather than to a bare time window, and why the tool insists on `confirm: true`. If you need protection against a broader replay, `route.dedupe.idPath` keys deduplication on a provider-native id in the payload, which survives re-ingestion.
 
 ### Hookdeck Issues are the dead-letter queue
 

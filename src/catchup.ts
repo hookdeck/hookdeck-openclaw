@@ -16,7 +16,13 @@ import type { Logger } from "./ingress/handler.js";
  *    window. Which is why shutdown pauses the connection before stopping the
  *    listener rather than just exiting politely.
  *
- * Replay is the only path that can be scoped to an outage window:
+ * This is a REPLAY, not a retry, and the difference matters: there are no
+ * events to retry, because Hookdeck discarded the requests without creating
+ * any. Re-ingesting them mints new event ids, which the dedup ledger has no
+ * way to relate to anything it has seen — so the query below is scoped to
+ * requests that produced no event at all rather than to a bare time window.
+ *
+ * Replay is also the only path that can be scoped to an outage window:
  * `bulk/ignored-events/retry` accepts only `{cause, webhook_id,
  * transformation_id}` with no date filter, and there is no project-wide
  * `GET /ignored-events` to enumerate with.
