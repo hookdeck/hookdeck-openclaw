@@ -170,6 +170,10 @@
           }
         }
       },
+      "projectId": {
+        "type": "string",
+        "description": "Pins API calls to one Hookdeck project via X-Team-Id. Optional for a project-scoped API key, which implies its project; needed for an organisation-scoped one."
+      },
       "provisioning": {
         "type": "object",
         "additionalProperties": false,
@@ -621,6 +625,10 @@
             "type": "string",
             "format": "uri",
             "description": "Public base URL of the Gateway, required for http transport provisioning."
+          },
+          "cliConfigPath": {
+            "type": "string",
+            "description": "Where the Hookdeck CLI keeps its session, used by hookdeck_doctor to check that the CLI and the API key point at the same project. Defaults to ~/.config/hookdeck/config.toml."
           }
         }
       }

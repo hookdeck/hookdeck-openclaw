@@ -32,3 +32,21 @@ On shutdown the connection is **paused before** the listener is stopped. That or
 The `pausedByUs` marker is written *before* the pause call, so a crash in between still leaves the breadcrumb that unpauses on the next start — a connection left paused forever is a silent outage.
 
 `lastDisconnectAt` is written on **every** listener exit, clean or otherwise. It is the only durable evidence of an outage window, and the catch-up replay needs it to bound its query: `bulk/requests/replay` is the only path that can be time-scoped, since `bulk/ignored-events/retry` takes no date filter and there is no project-wide `GET /ignored-events` to enumerate with.
+
+## The two projects problem
+
+In `cli` transport, "which Hookdeck project" has two independent answers:
+
+- `hookdeck_setup` and every API call act on the project the **API key** belongs to.
+- `hookdeck listen` looks for that connection in the project the **CLI session** is logged into.
+
+Nothing reconciles them, and the plugin deliberately does not try: forcing them together means `hookdeck ci`, which rewrites the CLI's global config and switches the active project for every other use on the machine.
+
+When they differ, the failure is quiet in the worst way. The Gateway starts, logs that the transport is up, and receives nothing — the tunnel restart-loops on `no connection found matching filter` while every event becomes an ignored `CLI_DISCONNECTED`.
+
+Two things make it visible rather than silent:
+
+- **`hookdeck_doctor` compares them.** It reads the CLI's project from its config file and the API key's from `team_id` on any connection the key can reach, and fails with both ids and the fix. A CLI with no session, or a key that reaches no connections, is reported as unverified rather than as a mismatch — a project can legitimately be empty, and a missing session is its own separate failure.
+- **The supervisor escalates a standing failure.** After three consecutive runs that fail to stay up, it logs once — not once per restart — with the CLI's own last lines and, where the output is recognisable, the likely cause. A healthy run re-arms it, so a second outage is not silent.
+
+If your API key is organisation-scoped rather than project-scoped, set `projectId` as well: without it a call can act on whichever project happens to hold a resource of the same name.

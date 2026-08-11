@@ -81,6 +81,7 @@ const configSchema = z.object({
   headerPrefix: z.string().min(1).default(DEFAULT_HEADER_PREFIX),
   signingSecret: secretInputSchema.optional(),
   apiKey: secretInputSchema.optional(),
+  projectId: z.string().min(1).optional(),
   tools: z
     .object({ allowMutations: z.boolean().default(true) })
     .default({ allowMutations: true }),
@@ -106,6 +107,7 @@ const configSchema = z.object({
       mode: z.enum(["cli", "http", "none"]).default("none"),
       port: z.number().int().positive().max(65535).default(18789),
       binaryPath: z.string().min(1).default("hookdeck"),
+      cliConfigPath: z.string().min(1).optional(),
       allowUnsupportedVersion: z.boolean().default(false),
       publicUrl: z.string().url().optional(),
     })
@@ -374,6 +376,7 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     maxConcurrent: value.maxConcurrent,
     busyRetryAfterSeconds: value.busyRetryAfterSeconds,
     deferAttemptLimit: value.deferAttemptLimit,
+    ...(value.projectId !== undefined ? { projectId: value.projectId } : {}),
     dedupe: { ttlHours: value.dedupe.ttlHours },
     tools: { allowMutations: value.tools.allowMutations },
     storage: {
@@ -388,6 +391,9 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
       mode: value.transport.mode,
       port: value.transport.port,
       binaryPath: value.transport.binaryPath,
+      ...(value.transport.cliConfigPath !== undefined
+        ? { cliConfigPath: value.transport.cliConfigPath }
+        : {}),
       allowUnsupportedVersion: value.transport.allowUnsupportedVersion,
       ...(value.transport.publicUrl !== undefined
         ? { publicUrl: value.transport.publicUrl }

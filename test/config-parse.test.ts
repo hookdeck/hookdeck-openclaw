@@ -292,10 +292,13 @@ describe("the manifest schema and the config parser must agree", () => {
     });
     if (!parsed.ok) throw new Error("fixture should parse");
 
+    // Optional keys are absent from a parse that does not set them, so they
+    // are named here rather than derived.
     const known = new Set([
       ...Object.keys(parsed.config),
       "signingSecret",
       "apiKey",
+      "projectId",
     ]);
     expect(declared.filter((k) => !known.has(k))).toEqual([]);
   });
@@ -436,5 +439,27 @@ describe("options the shipped transport cannot honour are named", () => {
     expect(
       result.warnings.find((w) => w.path === "routes.a.dispatch"),
     ).toBeUndefined();
+  });
+});
+
+describe("project pinning", () => {
+  it("accepts projectId and carries it into the config", () => {
+    const result = parseHookdeckConfig({
+      signingSecret: "whsec",
+      projectId: "tm_abc",
+      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.config.projectId).toBe("tm_abc");
+  });
+
+  it("accepts transport.cliConfigPath for the mismatch check", () => {
+    const result = parseHookdeckConfig({
+      signingSecret: "whsec",
+      transport: { mode: "cli", cliConfigPath: "/custom/config.toml" },
+      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.config.transport.cliConfigPath).toBe("/custom/config.toml");
   });
 });

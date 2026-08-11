@@ -83,6 +83,37 @@ export interface CliListener {
 export const DEFAULT_READINESS = /\b(connected|ready|listening|forwarding)\b/i;
 const RING_SIZE = 50;
 
+/**
+ * Consecutive failed runs before the supervisor says so loudly.
+ *
+ * A tunnel that cannot stay up restarts forever at `warn`, which reads as
+ * routine churn — meanwhile nothing is reaching the Gateway at all. Three is
+ * enough to distinguish a genuine standing failure from a blip.
+ */
+const ESCALATE_AFTER = 3;
+
+/**
+ * Recognisable causes, so the escalation names the fix rather than the symptom.
+ *
+ * `no connection found matching filter` is the signature of the CLI and the API
+ * key pointing at different projects: provisioning created the connection in
+ * one, and `hookdeck listen` is looking for it in the other.
+ */
+function likelyCause(output: readonly string[]): string | undefined {
+  const text = output.join("\n");
+  if (/no connection found matching filter/i.test(text)) {
+    return (
+      "the CLI is probably logged into a different Hookdeck project than the configured API key, " +
+      "so the connection provisioning created is not visible to `hookdeck listen`. Run hookdeck_doctor, " +
+      "which compares the two."
+    );
+  }
+  if (/unauthor|authentication failed|invalid.*key/i.test(text)) {
+    return "the CLI session looks unauthenticated or expired. Run `hookdeck login`.";
+  }
+  return undefined;
+}
+
 export function buildListenArgs(options: CliListenerOptions): string[] {
   return [
     "listen",
@@ -121,6 +152,8 @@ export function createCliListener(
   let connectedAt: number | undefined;
   let readinessTimer: { cancel(): void } | undefined;
   let restartTimer: { cancel(): void } | undefined;
+  let shortRuns = 0;
+  let escalated = false;
 
   /**
    * Scrubs a line of child output once, at the boundary, so every consumer
@@ -193,7 +226,19 @@ export function createCliListener(
       readinessTimer?.cancel();
       child = undefined;
       const wasConnected = connectedAt !== undefined;
-      if (wasConnected) backoff.markHealthy(now() - connectedAt!);
+      const ranForMs = wasConnected ? now() - connectedAt! : 0;
+
+      // A run that never reached the connection banner, or held it only
+      // briefly, is a failure to stay up rather than ordinary churn. Taken from
+      // `markHealthy` rather than from the failure count, which has not yet been
+      // incremented for this exit.
+      const healthy = wasConnected && backoff.markHealthy(ranForMs);
+      if (healthy) {
+        shortRuns = 0;
+        escalated = false;
+      } else {
+        shortRuns += 1;
+      }
 
       // Written on EVERY exit, crash or clean: it is the only durable evidence
       // of the outage window, and a catch-up query has nothing to bound
@@ -208,6 +253,22 @@ export function createCliListener(
       deps.logger.warn(
         `[${options.routeId}] listener exited (code ${code ?? "null"})`,
       );
+
+      // Once per streak, not per restart: the point is to break out of the
+      // routine-churn reading, which repeating it would undo.
+      if (shortRuns >= ESCALATE_AFTER && !escalated) {
+        escalated = true;
+        const tail = ring.slice(-5);
+        const cause = likelyCause(ring);
+        deps.logger.warn(
+          `[${options.routeId}] TUNNEL DOWN: failed to stay up ${shortRuns} times in a row` +
+            `${wasConnected ? ` (last run ${Math.round(ranForMs / 1000)}s)` : " (never connected)"}. ` +
+            `No events are reaching the Gateway for this route.` +
+            (cause !== undefined ? ` Likely cause: ${cause}` : "") +
+            (tail.length > 0 ? ` Last output: ${tail.join(" | ")}` : ""),
+        );
+      }
+
       scheduleRestart();
     });
   }

@@ -22,8 +22,13 @@ export interface Backoff {
   readonly failures: number;
   /** Delay for the next restart, or `undefined` once we have given up. */
   next(): number | undefined;
-  /** Called when the child has been connected long enough to count as healthy. */
-  markHealthy(connectedForMs: number): void;
+  /**
+   * Called when the child has been connected long enough to count as healthy.
+   * Returns whether that reset the counter, which is also the answer to "was
+   * that run a success?" — the supervisor needs it to tell a standing failure
+   * from ordinary churn.
+   */
+  markHealthy(connectedForMs: number): boolean;
   reset(): void;
 }
 
@@ -60,7 +65,9 @@ export function createBackoff(options: BackoffOptions = {}): Backoff {
     },
 
     markHealthy(connectedForMs) {
-      if (connectedForMs >= healthyResetMs) failures = 0;
+      if (connectedForMs < healthyResetMs) return false;
+      failures = 0;
+      return true;
     },
 
     reset() {

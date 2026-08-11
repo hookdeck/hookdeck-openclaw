@@ -19,6 +19,15 @@ export type FetchLike = (
 
 export interface HookdeckClientOptions {
   apiKey: string;
+  /**
+   * Pins every call to one project, via the same `X-Team-Id` header the
+   * Hookdeck CLI sends.
+   *
+   * A project-scoped key implies its project, so this is optional today. An
+   * organisation-scoped key does not, and without pinning it would act on
+   * whichever project happens to hold a matching resource name.
+   */
+  projectId?: string | undefined;
   baseUrl?: string;
   fetch?: FetchLike;
   timeoutMs?: number;
@@ -37,6 +46,8 @@ export type ApiResult<T> =
 
 export interface HookdeckConnection {
   id: string;
+  /** The project this connection belongs to; how we learn the key's project. */
+  team_id?: string;
   /** How a person refers to it. Issues carry only the id. */
   name?: string;
   paused_at?: string | null;
@@ -124,6 +135,8 @@ export interface HookdeckClient {
   upsertConnection(spec: unknown): Promise<ApiResult<HookdeckConnection>>;
 
   getConnection(id: string): Promise<ApiResult<HookdeckConnection>>;
+
+  listConnections(limit?: number): Promise<ApiResult<HookdeckConnection[]>>;
 
   /**
    * Holds inbound events at status `HOLD` until unpaused, delivered then with
@@ -229,6 +242,9 @@ export function createHookdeckClient(
         headers: {
           authorization: `Bearer ${options.apiKey}`,
           "content-type": "application/json",
+          ...(options.projectId !== undefined
+            ? { "x-team-id": options.projectId }
+            : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         signal: controller.signal,
@@ -319,6 +335,14 @@ export function createHookdeckClient(
         "GET",
         `/connections/${encodeURIComponent(id)}`,
       );
+    },
+
+    async listConnections(limit = 1) {
+      const result = await request<{ models?: HookdeckConnection[] }>(
+        "GET",
+        `/connections?limit=${limit}`,
+      );
+      return result.ok ? { ok: true, data: result.data.models ?? [] } : result;
     },
 
     async pauseConnection(id) {

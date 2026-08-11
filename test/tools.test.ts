@@ -113,6 +113,10 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
       ],
     })),
     countIssues: vi.fn(async () => ({ ok: true as const, data: 1 })),
+    listConnections: vi.fn(async () => ({
+      ok: true as const,
+      data: [{ id: "web_1", team_id: "tm_a" }],
+    })),
     ...overrides,
   };
 }
@@ -1413,5 +1417,95 @@ describe("a replay batch stops on the first rate limit", () => {
     const d = await deps();
     const result = await replayHandler(d, { eventIds: ["a", "b"] });
     expect(result.stoppedEarly).toBeUndefined();
+  });
+});
+
+describe("doctor diagnoses a CLI/API-key project mismatch", () => {
+  // In cli transport, "which project" has two independent answers: setup
+  // provisions in the API key's project, `hookdeck listen` looks in the CLI's.
+  // When they differ the Gateway reports healthy and receives nothing.
+  const cliConfig = (projectId: string) =>
+    `profile = 'default'\n\n[default]\nproject_id = '${projectId}'\n`;
+
+  async function doctorWith(options: {
+    cli?: string;
+    apiProject?: string | null;
+    client?: HookdeckClient | undefined;
+    mode?: string;
+  }) {
+    const d = await deps(
+      {
+        ...(options.client !== undefined || "client" in options
+          ? { client: options.client }
+          : {
+              client: fakeClient({
+                listConnections: vi.fn(async () => ({
+                  ok: true as const,
+                  data:
+                    options.apiProject === null
+                      ? []
+                      : [
+                          {
+                            id: "web_1",
+                            team_id: options.apiProject ?? "tm_a",
+                          },
+                        ],
+                })),
+              }),
+            }),
+        readFile: async () => {
+          if (options.cli === undefined) {
+            throw Object.assign(new Error("nope"), { code: "ENOENT" });
+          }
+          return cliConfig(options.cli);
+        },
+      },
+      { transport: { mode: options.mode ?? "cli" } },
+    );
+    const result = await doctorHandler(d);
+    return result.checks.find((c) => c.name === "cli/api-key project");
+  }
+
+  it("fails loudly when the two projects differ", async () => {
+    const check = await doctorWith({ cli: "tm_cli", apiProject: "tm_apikey" });
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toContain("tm_cli");
+    expect(check?.detail).toContain("tm_apikey");
+    expect(check?.detail).toMatch(/report healthy and receive nothing/i);
+    expect(check?.detail).toMatch(/hookdeck login/);
+  });
+
+  it("passes when they agree", async () => {
+    const check = await doctorWith({ cli: "tm_same", apiProject: "tm_same" });
+    expect(check?.ok).toBe(true);
+    expect(check?.detail).toContain("tm_same");
+  });
+
+  it("does not call an empty project a mismatch", async () => {
+    // A project can legitimately hold no connections, and sending someone to
+    // fix that would be worse than silence.
+    const check = await doctorWith({ cli: "tm_cli", apiProject: null });
+    expect(check?.ok).toBe(true);
+    expect(check?.detail).toMatch(/unverified/i);
+  });
+
+  it("does not call a missing CLI session a mismatch", async () => {
+    // That is its own failure: `hookdeck listen` cannot start at all, and
+    // reporting it here would point at the wrong fix.
+    const check = await doctorWith({ apiProject: "tm_a" });
+    expect(check?.ok).toBe(true);
+    expect(check?.detail).toMatch(/hookdeck login/);
+  });
+
+  it("says so rather than failing when there is no API key", async () => {
+    const check = await doctorWith({ cli: "tm_cli", client: undefined });
+    expect(check?.ok).toBe(true);
+    expect(check?.detail).toMatch(/nothing to compare/i);
+  });
+
+  it("is not run at all outside cli transport", async () => {
+    expect(
+      await doctorWith({ cli: "tm_cli", apiProject: "tm_b", mode: "none" }),
+    ).toBeUndefined();
   });
 });

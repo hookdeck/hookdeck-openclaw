@@ -58,6 +58,8 @@ export interface ToolDeps {
    * someone to fix a config that is already correct.
    */
   apiKeyUnresolved?: boolean;
+  /** Injectable so `doctor` can read the CLI's config in a test. */
+  readFile?: (path: string) => Promise<string>;
   now?(): number;
 }
 

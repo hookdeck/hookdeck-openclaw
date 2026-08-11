@@ -315,7 +315,14 @@ export default definePluginEntry({
             logger: log,
             ...(keyConfiguredButUnresolvable ? { apiKeyUnresolved: true } : {}),
             ...(apiKey !== undefined
-              ? { client: createHookdeckClient({ apiKey }) }
+              ? {
+                  client: createHookdeckClient({
+                    apiKey,
+                    ...(config.projectId !== undefined
+                      ? { projectId: config.projectId }
+                      : {}),
+                  }),
+                }
               : {}),
             configWarnings: () => parsed.warnings,
           };
@@ -461,7 +468,14 @@ export default definePluginEntry({
           return undefined;
         });
         const client =
-          apiKey !== undefined ? createHookdeckClient({ apiKey }) : undefined;
+          apiKey !== undefined
+            ? createHookdeckClient({
+                apiKey,
+                ...(config.projectId !== undefined
+                  ? { projectId: config.projectId }
+                  : {}),
+              })
+            : undefined;
 
         // Before serving anything: hand interrupted work back to Hookdeck.
         const summary = await reconcileOrphans({

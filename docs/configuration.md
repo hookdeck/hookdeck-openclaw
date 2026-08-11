@@ -6,6 +6,8 @@ Every setting, its default, and what it changes.
 |---|---|---|
 | `headerPrefix` | `x-hookdeck` | Hookdeck's header prefix is white-labelable per project. Set it if yours differs. |
 | `signingSecret` | — | Inline string or a secretRef `{source, provider, id}`. Routes may override. Re-resolved on every request, so rotation needs no restart. |
+| `projectId` | — | Pins API calls to one project via `X-Team-Id`. Optional for a project-scoped key, which implies its project; needed for an organisation-scoped one. |
+| `transport.cliConfigPath` | `~/.config/hookdeck/config.toml` | Where the Hookdeck CLI keeps its session. Read by `hookdeck_doctor` to check both point at the same project. |
 | `apiKey` | — | Optional. Needed for provisioning, pause/resume, replay, issue management and re-queuing interrupted work. Without it the plugin runs ingress-only. |
 | `storage.enabled` | `true` | Persist the ledger and dead-letter log. Off means memory-only — see [Durability](#durability-and-recovery). |
 | `storage.deadLetterMaxEntries` | `500` | Dead-letter entries kept before the oldest are dropped. |

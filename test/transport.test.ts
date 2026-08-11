@@ -503,3 +503,112 @@ describe("teardown does not wait on a child that has already exited", () => {
     expect(listener.state).toBe("stopped");
   });
 });
+
+describe("a tunnel that cannot stay up says so", () => {
+  // Restarting forever at warn level reads as routine churn while nothing
+  // reaches the Gateway at all.
+  function failing(output: string[] = []) {
+    const logs: string[] = [];
+    const exits: (() => void)[] = [];
+    const timers: (() => void)[] = [];
+    const listener = createCliListener(
+      {
+        routeId: "stripe",
+        source: "stripe",
+        port: 1,
+        path: "/p",
+        binaryPath: "hookdeck",
+        backoff: { initialDelayMs: 0, maxDelayMs: 0 },
+      },
+      {
+        spawn: () => {
+          const exitCbs: ((c: number | null, s: string | null) => void)[] = [];
+          const lineCbs: ((l: string) => void)[] = [];
+          queueMicrotask(() =>
+            output.forEach((l) => lineCbs.forEach((cb) => cb(l))),
+          );
+          exits.push(() => exitCbs.forEach((cb) => cb(1, null)));
+          return {
+            kill: () => {},
+            onLine: (cb: (l: string) => void) => lineCbs.push(cb),
+            onExit: (cb: (c: number | null, s: string | null) => void) =>
+              exitCbs.push(cb),
+          } as unknown as ChildHandle;
+        },
+        logger: {
+          debug: () => {},
+          info: () => {},
+          warn: (m: string) => logs.push(m),
+        },
+        onDisconnect: () => {},
+        // Timers are driven by the test rather than the clock, so a restart
+        // happens exactly when it is asked for.
+        setTimer: (fn: () => void) => {
+          timers.push(fn);
+          return { cancel: () => {} };
+        },
+      },
+    );
+    return {
+      listener,
+      logs,
+      crash: () => {
+        exits.pop()?.();
+        // Fire the scheduled restart, which launches the next child.
+        for (const fn of timers.splice(0)) fn();
+      },
+    };
+  }
+
+  it("stays quiet for the first couple of restarts", async () => {
+    const { listener, logs, crash } = failing();
+    listener.start();
+    crash();
+    await Promise.resolve();
+    crash();
+    expect(logs.filter((l) => l.includes("TUNNEL DOWN"))).toHaveLength(0);
+  });
+
+  it("escalates once a failure is standing, not once per restart", async () => {
+    const { listener, logs, crash } = failing();
+    listener.start();
+    for (let i = 0; i < 6; i += 1) {
+      crash();
+      await Promise.resolve();
+    }
+    const escalations = logs.filter((l) => l.includes("TUNNEL DOWN"));
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]).toMatch(/No events are reaching the Gateway/);
+  });
+
+  it("names the project mismatch when the CLI's own output shows it", async () => {
+    // The exact line the CLI prints when the connection exists in a different
+    // project than the one it is logged into.
+    const { listener, logs, crash } = failing([
+      'no connection found matching filter "stripe" for source "stripe"',
+    ]);
+    listener.start();
+    for (let i = 0; i < 4; i += 1) {
+      crash();
+      await Promise.resolve();
+    }
+    const escalation = logs.find((l) => l.includes("TUNNEL DOWN"))!;
+    expect(escalation).toMatch(/different Hookdeck project/i);
+    expect(escalation).toMatch(/hookdeck_doctor/);
+    expect(escalation).toMatch(/no connection found matching filter/);
+  });
+
+  it("names an expired session when that is what the output shows", async () => {
+    const { listener, logs, crash } = failing([
+      "Authentication failed: key expired",
+    ]);
+    listener.start();
+    for (let i = 0; i < 4; i += 1) {
+      crash();
+      await Promise.resolve();
+    }
+    expect(logs.find((l) => l.includes("TUNNEL DOWN"))).toMatch(
+      /hookdeck login/,
+    );
+  });
+});

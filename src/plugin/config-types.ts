@@ -154,6 +154,11 @@ export interface TransportConfig {
   port: number;
   /** Resolved explicitly, because a shadowed binary defeats the version gate. */
   binaryPath: string;
+  /**
+   * Where the Hookdeck CLI keeps its session, for the project-mismatch check.
+   * Defaults to the CLI's own `~/.config/hookdeck/config.toml`.
+   */
+  cliConfigPath?: string;
   /** Downgrade the >=2.4.0 gate to a warning. Sub-2.3.2 silently stops delivering. */
   allowUnsupportedVersion: boolean;
   /** Public base URL of the Gateway, for `http` mode provisioning. */
@@ -197,6 +202,14 @@ export interface HookdeckPluginConfig {
    * cannot be re-queued.
    */
   apiKey?: SecretInput;
+  /**
+   * Pins API calls to one project, via `X-Team-Id`.
+   *
+   * A project-scoped key implies its project, so this is optional. An
+   * organisation-scoped key does not: without it, a call could act on whichever
+   * project happens to hold a resource of the same name.
+   */
+  projectId?: string;
   ingress: {
     /** Route prefix registered on the Gateway. */
     basePath: string;
