@@ -48,7 +48,8 @@
     "typecheck": "tsc --noEmit",
     "test:live": "vitest run test/live",
     "test:agent": "bash scripts/agent-smoke.sh",
-    "test:package": "bash scripts/test-package.sh"
+    "test:package": "bash scripts/test-package.sh",
+    "test:e2e": "node scripts/e2e-live.mjs . $(date +%s | tail -c 6)"
   },
   "homepage": "https://github.com/hookdeck/hookdeck-openclaw#readme",
   "bugs": {

@@ -148,6 +148,7 @@ The README covers the common path. Everything else lives in [`docs/`](docs/):
 openclaw plugins install --link ./hookdeck-openclaw
 npm test           # no Gateway or Hookdeck account required
 npm run test:package   # loads the packed tarball in a real Gateway
+npm run test:e2e       # real project, real tunnel, real events (needs HOOKDECK_TEST_API_KEY)
 ```
 
 ## Learn more

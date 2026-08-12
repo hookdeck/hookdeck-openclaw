@@ -134,8 +134,9 @@ const configSchema = z.object({
     .object({
       enabled: z.boolean().default(true),
       minGapSeconds: z.number().int().nonnegative().max(86_400).default(30),
+      heartbeatSeconds: z.number().int().positive().max(3600).default(30),
     })
-    .default({ enabled: true, minGapSeconds: 30 }),
+    .default({ enabled: true, minGapSeconds: 30, heartbeatSeconds: 30 }),
   ingress: z
     .object({ basePath: z.string().min(1).default("/hookdeck") })
     .default({ basePath: "/hookdeck" }),
@@ -413,6 +414,7 @@ export function parseHookdeckConfig(raw: unknown): ConfigParseResult {
     catchUp: {
       enabled: value.catchUp.enabled,
       minGapSeconds: value.catchUp.minGapSeconds,
+      heartbeatSeconds: value.catchUp.heartbeatSeconds,
     },
     safety: { allowRetryCancel: value.safety.allowRetryCancel },
     routes,

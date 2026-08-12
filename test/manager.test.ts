@@ -747,3 +747,107 @@ describe("a deliberate pause survives a restart", () => {
     expect(client.pauseConnection).not.toHaveBeenCalled();
   });
 });
+
+describe("a crash that never ran its shutdown is still an outage", () => {
+  // `lastDisconnectAt` is written when the listener exits, which needs this
+  // process alive to notice. A kill -9 takes the handler with it, so without a
+  // liveness marker the outage leaves no record and catch-up skips the very
+  // case it exists for.
+  it("adopts a stale lastSeenAt as the start of the outage", async () => {
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    await cursors.patch("stripe", {
+      connectionId: "web_1",
+      lastSeenAt: 1_000,
+    });
+
+    const client = fakeClient();
+    const mgr = createTransportManager({
+      config: config({ transport: { mode: "none" } }),
+      cursors,
+      logger: silent,
+      client,
+      spawn: () => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }),
+      resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+      readVersion: async () => "hookdeck version 2.4.0",
+      now: () => 500_000,
+    });
+
+    await mgr.start();
+
+    // Consumed: catch-up ran with it, and the marker is gone so the next start
+    // does not treat a clean stop as a crash.
+    expect(client.bulkReplayRequests).toHaveBeenCalled();
+    expect(cursors.get("stripe")?.lastSeenAt).toBeUndefined();
+    await mgr.stop();
+  });
+
+  it("does not overwrite a disconnect the listener already recorded", async () => {
+    // Asserted on the window catch-up queried, because a successful catch-up
+    // then clears the cursor. The listener's own stamp is the earlier and
+    // truer one, and must win over the liveness marker.
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    await cursors.patch("stripe", {
+      connectionId: "web_1",
+      lastDisconnectAt: 100,
+      lastSeenAt: 9_000,
+    });
+
+    const client = fakeClient();
+    const mgr = createTransportManager({
+      config: config({ transport: { mode: "none" } }),
+      cursors,
+      logger: silent,
+      client,
+      spawn: () => ({ kill: () => {}, onLine: () => {}, onExit: () => {} }),
+      resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+      readVersion: async () => "hookdeck version 2.4.0",
+      now: () => 500_000,
+    });
+
+    await mgr.start();
+
+    const query = (client.bulkReplayRequests as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0]?.query as { ingested_at?: { gte?: string } };
+    expect(query?.ingested_at?.gte).toBe(new Date(100).toISOString());
+    await mgr.stop();
+  });
+
+  it("clears the marker on a clean stop, so a restart is not read as a crash", async () => {
+    const cursors = await createCursorStore({
+      stateDir: "/s",
+      io: createFakeStoreIo(),
+    });
+    await cursors.patch("stripe", { connectionId: "web_1" });
+
+    const mgr = createTransportManager({
+      config: config({ transport: { mode: "cli" } }),
+      cursors,
+      logger: silent,
+      client: fakeClient(),
+      // Exits when killed, as a real child does, so stop() does not wait it out.
+      spawn: () => {
+        const exitCbs: ((c: number | null, s: string | null) => void)[] = [];
+        return {
+          kill: () => exitCbs.forEach((cb) => cb(0, "SIGTERM")),
+          onLine: () => {},
+          onExit: (cb: (c: number | null, s: string | null) => void) =>
+            exitCbs.push(cb),
+        };
+      },
+      resolveBinary: async () => ({ path: "hookdeck", all: ["hookdeck"] }),
+      readVersion: async () => "hookdeck version 2.4.0",
+    });
+
+    await mgr.start();
+    expect(cursors.get("stripe")?.lastSeenAt).toBeTypeOf("number");
+
+    await mgr.stop();
+    expect(cursors.get("stripe")?.lastSeenAt).toBeUndefined();
+  });
+});

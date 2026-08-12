@@ -23,3 +23,15 @@ Without `apiKey`, orphans are still detected, settled and dead-lettered — they
 `safety.allowRetryCancel` lets the plugin answer `Retry-After: -1` on permanently-invalid input — malformed JSON, a body that will never fit — which tells Hookdeck to stop retrying instead of burning all 50 attempts on something that cannot succeed.
 
 **It is off by default, and that default is deliberate.** A mistake here discards real traffic, and the events are gone once retention lapses (3 days on the free plan). Cancellation is only ever emitted from a closed allowlist of reasons, always dead-letters first, and never fires for anything a config change could fix — a missing secret, an unresolvable secretRef or a storage failure all stay retryable. Turn it on once you have watched the logs and seen what it *would* have cancelled.
+
+## A crash that never ran its shutdown
+
+`lastDisconnectAt` is written when the tunnel's child process exits, which requires this process to be alive to notice. A `kill -9`, an OOM kill or a power cut takes that handler with it, so the outage most in need of catch-up would leave no record of itself at all — and catch-up, finding no disconnect, would skip it.
+
+So while the transport is running the plugin records a liveness marker every `catchUp.heartbeatSeconds` (30 by default), and clears it on a clean shutdown. Finding one at startup means the previous process died without stopping, and its timestamp becomes the start of the outage window.
+
+Over-shooting that window by up to one heartbeat is harmless: the catch-up query matches only requests that produced no event at all, so anything that did deliver is excluded by construction.
+
+## Malformed bodies never reach the plugin
+
+Verified end to end: Hookdeck rejects an unparseable JSON body **at the edge**, answering the sender `400` with `rejection_cause: UNPARSABLE_JSON` and creating no event. The plugin's own `malformed_json` handling is therefore defence in depth rather than a path real traffic takes — it covers a body that survives the edge and fails here, such as one that is valid JSON but not valid UTF-8.

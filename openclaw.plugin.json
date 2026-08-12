@@ -105,6 +105,11 @@
             "maximum": 86400,
             "default": 30,
             "description": "Below this, an outage is not worth a bulk replay."
+          },
+          "heartbeatSeconds": {
+            "type": "integer",
+            "default": 30,
+            "description": "How often to record that the gateway is alive, so a crash that never ran its shutdown is still detectable as an outage."
           }
         }
       },

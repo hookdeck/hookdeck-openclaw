@@ -224,10 +224,7 @@ export interface HookdeckClient {
    * over the API — the secret is never returned — so `verified` on the requests
    * that actually arrived is the only signal there is.
    */
-  listRequests(params?: {
-    limit?: number;
-    sourceId?: string;
-  }): Promise<
+  listRequests(params?: { limit?: number; sourceId?: string }): Promise<
     ApiResult<
       {
         id: string;

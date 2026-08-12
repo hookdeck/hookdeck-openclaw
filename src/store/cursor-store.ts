@@ -35,6 +35,16 @@ export interface CursorRecord {
    * treated as `shutdown` to preserve the original behaviour.
    */
   pauseReason?: "shutdown" | "operator";
+  /**
+   * Last time this process was known to be running and forwarding.
+   *
+   * Written periodically and cleared on a clean shutdown, so finding one at
+   * startup means the previous process died without running its teardown —
+   * a `kill -9`, an OOM kill, a power cut. That is the outage most in need of
+   * catch-up, and the one where nothing else records a disconnect, because the
+   * handler that would have done so died with the process.
+   */
+  lastSeenAt?: number;
   provisioningFingerprint?: string;
   connectionId?: string;
   updatedAt: number;

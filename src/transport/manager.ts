@@ -75,6 +75,7 @@ export function createTransportManager(
   const now = deps.now ?? Date.now;
   const listeners = new Map<string, CliListener>();
   let started = false;
+  let heartbeat: { cancel(): void } | undefined;
 
   /**
    * Stamps the start of an outage, once.
@@ -229,6 +230,47 @@ export function createTransportManager(
    * Also runs on every reconnect, not only at boot: a tunnel that drops and
    * returns has its own outage window to recover.
    */
+  /**
+   * Adopts a liveness marker left by a process that never shut down.
+   *
+   * `lastDisconnectAt` is written when the listener exits, which needs this
+   * process to be alive to notice. A hard crash kills the handler along with
+   * everything else, so without this the outage leaves no record and catch-up
+   * skips the very case it exists for.
+   *
+   * Over-shooting the window by one heartbeat is harmless: the catch-up query
+   * matches only requests that produced no event at all, so anything that did
+   * deliver is excluded by construction.
+   */
+  async function adoptCrashedRun(): Promise<void> {
+    for (const cursor of cursors.all()) {
+      if (cursor.lastSeenAt === undefined) continue;
+      if (cursor.lastDisconnectAt === undefined) {
+        logger.warn(
+          `route '${cursor.routeId}': the previous run ended without shutting down; ` +
+            `treating ${new Date(cursor.lastSeenAt).toISOString()} as the start of the outage`,
+        );
+        await cursors.patch(cursor.routeId, {
+          lastDisconnectAt: cursor.lastSeenAt,
+        });
+      }
+      await cursors.clear(cursor.routeId, "lastSeenAt");
+    }
+  }
+
+  /** Marks this process as alive, so a crash is distinguishable from a stop. */
+  function startHeartbeat(): void {
+    const write = () => {
+      for (const routeId of Object.keys(config.routes)) {
+        void cursors.patch(routeId, { lastSeenAt: now() });
+      }
+    };
+    write();
+    const timer = setInterval(write, config.catchUp.heartbeatSeconds * 1000);
+    timer.unref?.();
+    heartbeat = { cancel: () => clearInterval(timer) };
+  }
+
   async function recoverRoute(routeId: string): Promise<void> {
     try {
       await unpauseIfWePaused(routeId);
@@ -312,6 +354,9 @@ export function createTransportManager(
       started = true;
 
       await seedConfiguredConnectionIds();
+      // Before anything else reads the cursors: a crashed previous run has to
+      // become a recordeddisconnect, or the recovery below has nothing to act on.
+      await adoptCrashedRun();
       await provision();
 
       // Under CLI transport, recovery is driven by `onConnected` per route:
@@ -321,6 +366,7 @@ export function createTransportManager(
       if (config.transport.mode === "cli") {
         // Passed to the child via env only, never argv.
         await startListeners(deps.apiKey);
+        if (listeners.size > 0) startHeartbeat();
       } else {
         await unpauseIfWePaused();
         await catchUp();
@@ -329,6 +375,8 @@ export function createTransportManager(
 
     async stop() {
       started = false;
+      heartbeat?.cancel();
+      heartbeat = undefined;
 
       // Bounded as a whole. Pausing is a network call per route, and against an
       // unreachable API the per-call timeout alone would multiply by the route
@@ -384,6 +432,12 @@ export function createTransportManager(
         [...listeners.values()].map((l) => l.stop().catch(() => {})),
       );
       listeners.clear();
+
+      // Cleared last: reaching here at all means the teardown ran, so the next
+      // start must not mistake this for a crash.
+      for (const routeId of Object.keys(config.routes)) {
+        await cursors.clear(routeId, "lastSeenAt").catch(() => {});
+      }
     },
 
     status() {

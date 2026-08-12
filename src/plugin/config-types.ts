@@ -189,6 +189,8 @@ export interface CatchUpConfig {
   enabled: boolean;
   /** Below this, an outage is not worth a bulk replay. */
   minGapSeconds: number;
+  /** How often to record that this process is alive, so a crash is detectable. */
+  heartbeatSeconds: number;
 }
 
 export interface HookdeckPluginConfig {
