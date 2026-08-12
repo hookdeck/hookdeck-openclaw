@@ -1509,3 +1509,88 @@ describe("doctor diagnoses a CLI/API-key project mismatch", () => {
     ).toBeUndefined();
   });
 });
+
+describe("counts are counted, never measured from a page", () => {
+  // A tool that returns twenty of four hundred without saying so leaves a
+  // model to guess the total, and it will guess from what it can see.
+  it("reports the real open-issue total alongside the page", async () => {
+    const d = await deps({
+      client: fakeClient({
+        countIssues: vi.fn(async () => ({ ok: true as const, data: 400 })),
+      }),
+    });
+    const result = await recentDeliveriesHandler(d, {});
+
+    expect(result.openIssuesTotal).toBe(400);
+    expect(result.openIssues).toHaveLength(1);
+    expect(String(result.openIssuesTruncated)).toMatch(/Showing 1 of 400/);
+  });
+
+  it("does not claim truncation when the page holds everything", async () => {
+    const d = await deps();
+    const result = await recentDeliveriesHandler(d, {});
+    expect(result.openIssuesTotal).toBe(1);
+    expect(result.openIssuesTruncated).toBeUndefined();
+  });
+
+  it("distinguishes an uncountable total from zero", async () => {
+    const d = await deps({
+      client: fakeClient({
+        countIssues: vi.fn(async () => ({
+          ok: false as const,
+          code: "api_error",
+          message: "boom",
+        })),
+      }),
+    });
+    expect((await recentDeliveriesHandler(d, {})).openIssuesTotal).toBeNull();
+  });
+
+  it("says how many local records it left out", async () => {
+    const d = await deps();
+    for (let i = 0; i < 30; i += 1) {
+      await d.deadLetter.record({
+        eventId: `evt_${i}`,
+        routeId: "stripe",
+        code: "c",
+        reason: "r",
+        retriesCancelled: false,
+        lastAttempt: true,
+      });
+    }
+    const result = await recentDeliveriesHandler(d, { limit: 5 });
+    expect(String(result.localTruncated)).toMatch(/Showing 5 of 30/);
+  });
+
+  it("marks a full dead-letter log as a floor, not a total", async () => {
+    // The log evicts oldest-first at its cap, so "500" is "at least 500".
+    const d = await deps();
+    const { createDeadLetterLog } = await import("../src/store/deadletter.js");
+    d.deadLetter = await createDeadLetterLog({ ttlHours: 168, maxEntries: 3 });
+    for (let i = 0; i < 5; i += 1) {
+      await d.deadLetter.record({
+        eventId: `evt_${i}`,
+        code: "c",
+        reason: "r",
+        retriesCancelled: false,
+        lastAttempt: true,
+      });
+    }
+
+    const result = await statusHandler(d, {});
+    expect(result.deadLetters).toBe(3);
+    expect(result.deadLettersIsAtLeast).toBe(true);
+  });
+
+  it("does not mark a log below its cap", async () => {
+    const d = await deps();
+    await d.deadLetter.record({
+      eventId: "evt_1",
+      code: "c",
+      reason: "r",
+      retriesCancelled: false,
+      lastAttempt: true,
+    });
+    expect((await statusHandler(d, {})).deadLettersIsAtLeast).toBeUndefined();
+  });
+});

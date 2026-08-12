@@ -20,10 +20,12 @@ export async function recentDeliveriesHandler(
 
   // Filter first, then limit: filtering a pre-truncated page silently returns
   // fewer rows than asked for.
-  const local = deps.deadLetter
+  const matching = deps.deadLetter
     .list(500)
-    .filter((r) => params.routeId === undefined || r.routeId === params.routeId)
-    .slice(0, limit);
+    .filter(
+      (r) => params.routeId === undefined || r.routeId === params.routeId,
+    );
+  const local = matching.slice(0, limit);
 
   // Joined rather than returned separately: Hookdeck's view and ours disagree
   // precisely when something interesting happened.
@@ -54,6 +56,7 @@ export async function recentDeliveriesHandler(
   // place to be wrong.
   let issues: ReturnType<typeof summariseIssue>[] | null = null;
   let issuesNote: string | undefined;
+  let openIssuesTotal: number | null = null;
   if (deps.client !== undefined) {
     const result = await deps.client.listIssues({
       status: "OPENED",
@@ -62,6 +65,12 @@ export async function recentDeliveriesHandler(
     if (result.ok) {
       const names = await resolveConnectionNames(deps.client, result.data);
       issues = result.data.map((i) => summariseIssue(i, names));
+
+      // Counted, never inferred from the page. A tool that returns twenty of
+      // four hundred issues without saying so leaves a model to guess at the
+      // total, and it will guess from what it can see.
+      const total = await deps.client.countIssues({ status: "OPENED" });
+      if (total.ok) openIssuesTotal = total.data;
     } else {
       issuesNote = `Could not read Hookdeck Issues: ${result.message}`;
     }
@@ -81,12 +90,29 @@ export async function recentDeliveriesHandler(
     // The real DLQ.
     openIssues: issues,
     /**
+     * How many there actually are, counted rather than measured from the page.
+     * Null when it could not be counted, which is different from zero.
+     */
+    openIssuesTotal,
+    ...(issues !== null &&
+    openIssuesTotal !== null &&
+    issues.length < openIssuesTotal
+      ? {
+          openIssuesTruncated: `Showing ${issues.length} of ${openIssuesTotal} open issues. Raise limit, or use hookdeck_issues.`,
+        }
+      : {}),
+    /**
      * Failures Hookdeck cannot see, because we had already answered 2xx when
      * they happened. No Issue will ever open for these.
      */
     unreportedFailures: postAck,
     /** Local mirror of failures Hookdeck also recorded; prefer the Issue. */
     locallyRecorded: rows.filter((r) => r.hookdeckVisible === true),
+    ...(matching.length > local.length
+      ? {
+          localTruncated: `Showing ${local.length} of ${matching.length} local records. Raise limit to see more.`,
+        }
+      : {}),
     ...(issuesNote !== undefined ? { note: issuesNote } : {}),
     ...(issues !== null && issues.length === 0 && postAck.length === 0
       ? {

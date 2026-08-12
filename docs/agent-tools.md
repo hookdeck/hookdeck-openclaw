@@ -85,3 +85,11 @@ Payload text from a webhook is third-party input, and the tools treat it that wa
 - The delivered body is **opt-in** (`includeBody`), truncated at 4,000 characters, and labelled as data rather than presented as something addressed to the reader.
 - The `hookdeck listen` child's output is scrubbed of the API key as it is captured, not as it is read — that output is surfaced by `hookdeck_status` and we do not write it, so a future CLI version echoing a key into a banner would otherwise land it in a model's context with nothing here having changed.
 - A test asserts that no configured secret appears in *any* tool's result, so the next tool added inherits the check.
+
+## Counts are counted
+
+A status tool that returns a page and lets the reader infer a total is worse than one that says nothing: a model asked "what needs attention?" will report what it can see as though it were everything.
+
+- `hookdeck_status.openIssues` and `hookdeck_issues`' `total` come from Hookdeck's count endpoint, not from the length of a page.
+- `hookdeck_recent_deliveries` returns `openIssuesTotal` beside the page it shows, and an `openIssuesTruncated` note whenever the two differ. The local records get the same treatment via `localTruncated`.
+- `hookdeck_status.deadLetters` is the local log's true size, but the log evicts oldest-first at its cap — so once it is full, `deadLettersIsAtLeast: true` says the number is a floor. A floor reported as a floor beats a ceiling reported as a total.

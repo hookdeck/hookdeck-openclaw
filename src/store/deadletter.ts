@@ -63,6 +63,8 @@ export interface DeadLetterLog {
   ): Promise<DeadLetterRecord>;
   list(limit?: number): DeadLetterRecord[];
   count(): number;
+  /** The cap at which the log evicts oldest-first, so callers can say "at least". */
+  capacity(): number;
   close(): Promise<void>;
   stats(): { entries: number; persistence: PersistenceState };
 }
@@ -141,6 +143,10 @@ export async function createDeadLetterLog(
 
     count() {
       return store.values().length;
+    },
+
+    capacity() {
+      return maxEntries;
     },
 
     async close() {

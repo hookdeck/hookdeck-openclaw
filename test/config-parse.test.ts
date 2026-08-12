@@ -447,7 +447,9 @@ describe("project pinning", () => {
     const result = parseHookdeckConfig({
       signingSecret: "whsec",
       projectId: "tm_abc",
-      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+      routes: {
+        a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } },
+      },
     });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.config.projectId).toBe("tm_abc");
@@ -457,9 +459,12 @@ describe("project pinning", () => {
     const result = parseHookdeckConfig({
       signingSecret: "whsec",
       transport: { mode: "cli", cliConfigPath: "/custom/config.toml" },
-      routes: { a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } } },
+      routes: {
+        a: { source: "a", dispatch: { mode: "wake", sessionKey: "m" } },
+      },
     });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.config.transport.cliConfigPath).toBe("/custom/config.toml");
+    if (result.ok)
+      expect(result.config.transport.cliConfigPath).toBe("/custom/config.toml");
   });
 });

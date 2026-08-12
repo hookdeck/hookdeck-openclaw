@@ -68,6 +68,14 @@ export async function statusHandler(
         : {}),
     },
     deadLetters: deps.deadLetter.count(),
+    /**
+     * The log evicts oldest-first at its cap, so a count sitting at the cap is
+     * a floor rather than a total. Said out loud: a model reporting "500
+     * failures" as the number is worse than one reporting "at least 500".
+     */
+    ...(deps.deadLetter.count() >= deps.deadLetter.capacity()
+      ? { deadLettersIsAtLeast: true }
+      : {}),
     retryCancellations: deps.retryCancels?.() ?? null,
     transport: {
       mode: deps.config.transport.mode,
