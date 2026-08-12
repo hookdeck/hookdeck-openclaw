@@ -121,6 +121,10 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
       ok: true as const,
       data: [{ id: "req_1", verified: true }],
     })),
+    getBulkReplay: vi.fn(async (id: string) => ({
+      ok: true as const,
+      data: { id, completed_at: "2026-01-01T00:00:00Z", completed_count: 1 },
+    })),
     ...overrides,
   };
 }

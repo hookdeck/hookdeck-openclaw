@@ -64,6 +64,10 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
       ok: true as const,
       data: [{ id: "req_1", verified: true }],
     })),
+    getBulkReplay: vi.fn(async (id: string) => ({
+      ok: true as const,
+      data: { id, completed_at: "2026-01-01T00:00:00Z", completed_count: 1 },
+    })),
     getIssue: vi.fn(async (id: string) => ({
       ok: true as const,
       data: { id },
@@ -303,8 +307,7 @@ describe("catch-up", () => {
       sourceId: "src_1",
     });
     expect(query).toMatchObject({
-      cli_events_count: 0,
-      ignored_count: { gte: 1 },
+      events_count: 0,
       source_id: "src_1",
     });
     expect((query.ingested_at as { gte: string }).gte).toBe(
@@ -849,5 +852,164 @@ describe("a crash that never ran its shutdown is still an outage", () => {
 
     await mgr.stop();
     expect(cursors.get("stripe")?.lastSeenAt).toBeUndefined();
+  });
+});
+
+describe("the catch-up filter matches every way a request is stranded", () => {
+  // Measured against a live project: the two disconnect regimes look different
+  // and the old filter only covered one of them.
+  //
+  //   tunnel never existed        events_count 0, ignored_count 1
+  //   tunnel connected then died  events_count 0, ignored_count 0
+  //
+  // The second is the hard-crash case. It matches neither `ignored_count >= 1`
+  // nor `cli_events_count: 0` — that field is not populated when no CLI event
+  // was ever created — so filtering on either excludes the case catch-up is for.
+  it("keys on events_count alone", () => {
+    const query = buildCatchUpQuery({ sinceMs: 1000, untilMs: 2000 });
+    expect(query.events_count).toBe(0);
+    expect(query).not.toHaveProperty("ignored_count");
+    expect(query).not.toHaveProperty("cli_events_count");
+  });
+
+  it("stays bounded to the outage window", () => {
+    const query = buildCatchUpQuery({ sinceMs: 1000, untilMs: 2000 });
+    expect(query.ingested_at).toEqual({
+      gte: new Date(1000).toISOString(),
+      lte: new Date(2000).toISOString(),
+    });
+  });
+});
+
+describe("catch-up reports what Hookdeck actually recovered", () => {
+  // A replay re-ingests each request as a NEW request with new events, leaving
+  // the original at events_count 0 forever. So re-reading the window can never
+  // show recovery, however long you wait — the batch's own counts are the only
+  // evidence there is.
+  const withBatch = (batch: Record<string, unknown>) => ({
+    ...fakeClient(),
+    getBulkReplay: vi.fn(async (id: string) => ({
+      ok: true as const,
+      data: { id, ...batch },
+    })),
+  });
+
+  it("reports the counts Hookdeck settled on", async () => {
+    const result = await runCatchUp({
+      client: withBatch({ completed_at: "now", completed_count: 3, estimated_count: 3 }) as never,
+      logger: silent,
+      connectionId: "web_1",
+      sinceMs: 1000,
+      untilMs: 2000,
+      minGapMs: 0,
+      now: () => 2000,
+      sleep: async () => {},
+    });
+
+    expect(result.ran).toBe(true);
+    if (result.ran) {
+      expect(result.recovered).toMatchObject({ complete: true, replayed: 3, planned: 3 });
+    }
+  });
+
+  it("warns when the batch replayed fewer than it planned", async () => {
+    const warnings: string[] = [];
+    await runCatchUp({
+      client: withBatch({ completed_at: "now", completed_count: 1, estimated_count: 4 }) as never,
+      logger: { ...silent, warn: (m: string) => warnings.push(m) },
+      connectionId: "web_1",
+      sinceMs: 1000,
+      untilMs: 2000,
+      minGapMs: 0,
+      now: () => 2000,
+      sleep: async () => {},
+    });
+    expect(warnings.join(" ")).toMatch(/1 of 4/);
+    expect(warnings.join(" ")).toMatch(/was not recovered/);
+  });
+
+  it("says the outcome is unknown when the batch cannot be read", async () => {
+    const warnings: string[] = [];
+    const result = await runCatchUp({
+      client: {
+        ...fakeClient(),
+        getBulkReplay: vi.fn(async () => ({
+          ok: false as const,
+          code: "api_error",
+          message: "boom",
+        })),
+      } as never,
+      logger: { ...silent, warn: (m: string) => warnings.push(m) },
+      connectionId: "web_1",
+      sinceMs: 1000,
+      untilMs: 2000,
+      minGapMs: 0,
+      now: () => 2000,
+      sleep: async () => {},
+    });
+    if (result.ran) expect(result.recovered?.unknown).toBe("boom");
+    expect(warnings.join(" ")).toMatch(/could not be read/);
+  });
+});
+
+describe("catch-up waits for the batch before judging it", () => {
+  // The replay call returns once the batch is accepted, so checking
+  // immediately reads a window the replay has not finished filling — and the
+  // check reports its own events as missing.
+  it("polls until the batch completes, then verifies", async () => {
+    let polls = 0;
+    const client = {
+      ...fakeClient(),
+      getBulkReplay: vi.fn(async (id: string) => {
+        polls += 1;
+        return {
+          ok: true as const,
+          data: polls < 3 ? { id, in_progress: true } : { id, completed_at: "now", completed_count: 2 },
+        };
+      }),
+      listRequests: vi.fn(async () => ({ ok: true as const, data: [] })),
+    };
+
+    const result = await runCatchUp({
+      client: client as never,
+      logger: silent,
+      connectionId: "web_1",
+      sinceMs: 1000,
+      untilMs: 2000,
+      minGapMs: 0,
+      now: () => 2000,
+      sleep: async () => {},
+    });
+
+    expect(polls).toBe(3);
+    expect(result.ran).toBe(true);
+    if (result.ran) expect(result.recovered?.complete).toBe(true);
+  });
+
+  it("gives up waiting rather than hanging the transport", async () => {
+    const warnings: string[] = [];
+    let clock = 0;
+    const client = {
+      ...fakeClient(),
+      getBulkReplay: vi.fn(async (id: string) => {
+        clock += 5000; // never completes
+        return { ok: true as const, data: { id, in_progress: true } };
+      }),
+      listRequests: vi.fn(async () => ({ ok: true as const, data: [] })),
+    };
+
+    await runCatchUp({
+      client: client as never,
+      logger: { ...silent, warn: (m: string) => warnings.push(m) },
+      connectionId: "web_1",
+      sinceMs: 1000,
+      untilMs: 2000,
+      minGapMs: 0,
+      verifyTimeoutMs: 10_000,
+      now: () => 2000 + clock,
+      sleep: async () => {},
+    });
+
+    expect(warnings.join(" ")).toMatch(/had not finished within the wait/);
   });
 });

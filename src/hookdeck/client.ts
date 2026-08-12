@@ -230,8 +230,29 @@ export interface HookdeckClient {
         id: string;
         verified?: boolean | null;
         rejection_cause?: string | null;
+        /** Zero means the request produced no delivery to anything. */
+        events_count?: number | null;
+        ingested_at?: string;
       }[]
     >
+  >;
+
+  /**
+   * Progress of a bulk replay.
+   *
+   * The replay call returns as soon as the batch is accepted, so its
+   * `estimated_count` is a plan rather than a result. Only `completed_at`
+   * says the work is done, which is the difference between "a replay was
+   * requested" and "the events exist".
+   */
+  getBulkReplay(id: string): Promise<
+    ApiResult<{
+      id: string;
+      completed_at?: string | null;
+      in_progress?: boolean;
+      estimated_count?: number;
+      completed_count?: number;
+    }>
   >;
 
   bulkReplayRequests(params: {
@@ -490,6 +511,10 @@ export function createHookdeckClient(
         }[];
       }>("GET", `/requests?${query}`);
       return result.ok ? { ok: true, data: result.data.models ?? [] } : result;
+    },
+
+    async getBulkReplay(id) {
+      return request("GET", `/bulk/requests/replay/${encodeURIComponent(id)}`);
     },
 
     async bulkReplayRequests(params) {

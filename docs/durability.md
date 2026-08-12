@@ -32,6 +32,27 @@ So while the transport is running the plugin records a liveness marker every `ca
 
 Over-shooting that window by up to one heartbeat is harmless: the catch-up query matches only requests that produced no event at all, so anything that did deliver is excluded by construction.
 
+## What catch-up guarantees
+
+Within Hookdeck's retention, catch-up recovers every request that arrived during an outage and produced no delivery. Three things make that a guarantee rather than a hope, and each was wrong at some point:
+
+**The filter matches every way a request can be stranded.** Measured against a live project, the two disconnect regimes look different:
+
+| | `events_count` | `ignored_count` |
+|---|---|---|
+| The tunnel never existed | 0 | 1 |
+| The tunnel connected, then the process was killed | 0 | **0** |
+
+The second is the hard-crash case. It matches neither `ignored_count >= 1` nor `cli_events_count: 0` — that field is not populated when no CLI event was ever created — so a filter using either excludes precisely the case catch-up exists for. The query keys on `events_count: 0` alone.
+
+**The outage window survives a crash.** See [above](#a-crash-that-never-ran-its-shutdown).
+
+**The result is confirmed, not assumed.** The replay call returns as soon as the batch is accepted, so its `estimated_count` is a plan. The plugin polls the batch until Hookdeck reports it finished and then logs `N of M request(s) replayed`. A shortfall is a warning naming it; a batch that does not finish within the wait is reported as unknown rather than as success.
+
+What it cannot do is recover anything Hookdeck has already aged out — 3 days on free, 7 on Team, 30 on Growth. Beyond that the request is gone at the source, and no filter or replay reaches it.
+
+> Do not try to verify recovery by re-reading the original requests. A replay re-ingests each one as a **new** request with new events, so the original stays at `events_count: 0` for ever. Checking it will always report a stranded request that was in fact recovered.
+
 ## Malformed bodies never reach the plugin
 
 Verified end to end: Hookdeck rejects an unparseable JSON body **at the edge**, answering the sender `400` with `rejection_cause: UNPARSABLE_JSON` and creating no event. The plugin's own `malformed_json` handling is therefore defence in depth rather than a path real traffic takes — it covers a body that survives the edge and fails here, such as one that is valid JSON but not valid UTF-8.

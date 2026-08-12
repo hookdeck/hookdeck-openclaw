@@ -209,12 +209,36 @@ record(
 );
 
 log = await startGateway("restart");
-await sleep(20000);
+await sleep(25000);
 const catchUpLog = log.join("");
 record(
   "catch-up replay is issued on reconnect",
   /catch-up replay queued/.test(catchUpLog),
   (catchUpLog.match(/catch-up replay queued[^\n]*/) ?? ["not in log"])[0].slice(0, 80),
+);
+record(
+  "the replay matched the stranded request rather than nothing",
+  /catch-up replay queued \(~[1-9]/.test(catchUpLog),
+  (catchUpLog.match(/catch-up replay queued[^\n]*/) ?? ["not in log"])[0].slice(0, 60),
+);
+record(
+  "Hookdeck confirms the batch finished, with counts",
+  /catch-up replay finished: \d+ of \d+/.test(catchUpLog),
+  (catchUpLog.match(/catch-up replay finished:[^\n]*/) ?? ["not reported"])[0].slice(0, 70),
+);
+record(
+  "every request it planned to replay was replayed",
+  !/was not recovered/.test(catchUpLog),
+  (catchUpLog.match(/catch-up replay finished:[^\n]*/) ?? [""])[0].slice(0, 50),
+);
+// The event should now exist for our connection.
+const recovered = (await eventsForConnection()).filter(
+  (e) => e.created_at > new Date(t4 - 3000).toISOString(),
+);
+record(
+  "the event missed during the outage now exists",
+  recovered.length > 0,
+  `${recovered.length} event(s) created after the outage began`,
 );
 
 // ======================================================== 5. crash recovery
