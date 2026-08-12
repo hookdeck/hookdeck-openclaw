@@ -60,6 +60,10 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
       ok: true as const,
       data: [{ id: "web_1", team_id: "tm_a" }],
     })),
+    listRequests: vi.fn(async () => ({
+      ok: true as const,
+      data: [{ id: "req_1", verified: true }],
+    })),
     getIssue: vi.fn(async (id: string) => ({
       ok: true as const,
       data: { id },

@@ -146,7 +146,8 @@ The README covers the common path. Everything else lives in [`docs/`](docs/):
 
 ```bash
 openclaw plugins install --link ./hookdeck-openclaw
-npm test   # no Gateway or Hookdeck account required
+npm test           # no Gateway or Hookdeck account required
+npm run test:package   # loads the packed tarball in a real Gateway
 ```
 
 ## Learn more

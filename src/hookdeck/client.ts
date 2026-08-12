@@ -216,6 +216,27 @@ export interface HookdeckClient {
    * endpoint takes `{cause, webhook_id, transformation_id}` with no date
    * filter, and there is no project-wide listing of ignored events.
    */
+  /**
+   * Recent inbound requests, for the one question the API cannot answer
+   * directly: whether a source is really verifying its provider's signatures.
+   *
+   * A source with a provider secret set is byte-identical to one without it
+   * over the API — the secret is never returned — so `verified` on the requests
+   * that actually arrived is the only signal there is.
+   */
+  listRequests(params?: {
+    limit?: number;
+    sourceId?: string;
+  }): Promise<
+    ApiResult<
+      {
+        id: string;
+        verified?: boolean | null;
+        rejection_cause?: string | null;
+      }[]
+    >
+  >;
+
   bulkReplayRequests(params: {
     query: Record<string, unknown>;
     target: { webhook_ids?: string[]; source_id?: string };
@@ -458,6 +479,20 @@ export function createHookdeckClient(
         `/issues/count?${query}`,
       );
       return result.ok ? { ok: true, data: result.data.count ?? 0 } : result;
+    },
+
+    async listRequests(params = {}) {
+      const query = new URLSearchParams({ limit: String(params.limit ?? 10) });
+      if (params.sourceId !== undefined)
+        query.set("source_id", params.sourceId);
+      const result = await request<{
+        models?: {
+          id: string;
+          verified?: boolean | null;
+          rejection_cause?: string | null;
+        }[];
+      }>("GET", `/requests?${query}`);
+      return result.ok ? { ok: true, data: result.data.models ?? [] } : result;
     },
 
     async bulkReplayRequests(params) {

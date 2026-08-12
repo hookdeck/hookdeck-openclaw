@@ -65,6 +65,30 @@ export async function doctorHandler(deps: ToolDeps) {
     });
   }
 
+  // Whether provider verification is actually in force. Setting a source's
+  // TYPE to STRIPE or GITHUB does not enable it — the provider's secret has to
+  // be set as well — and a source with one is indistinguishable from a source
+  // without it over the API, because the secret is never returned. So the only
+  // evidence is whether the requests that arrived were verified.
+  if (deps.client !== undefined) {
+    const requests = await deps.client.listRequests({ limit: 20 });
+    if (requests.ok && requests.data.length > 0) {
+      const unverified = requests.data.filter(
+        (r) => r.verified === false,
+      ).length;
+      checks.push({
+        name: "provider verification",
+        ok: unverified === 0,
+        detail:
+          unverified === 0
+            ? `the last ${requests.data.length} inbound request(s) were verified by Hookdeck`
+            : `${unverified} of the last ${requests.data.length} inbound request(s) arrived UNVERIFIED. ` +
+              `A source's type does not enable verification on its own — the provider's signing secret ` +
+              `has to be set on the source too, or anyone who learns the URL can post to it.`,
+      });
+    }
+  }
+
   // In `cli` transport, "which project" has two independent answers:
   // provisioning acts on the API key's project, while `hookdeck listen` looks
   // for that connection in whichever project the CLI's session points at. When

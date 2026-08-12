@@ -117,6 +117,10 @@ function fakeClient(overrides: Partial<HookdeckClient> = {}): HookdeckClient {
       ok: true as const,
       data: [{ id: "web_1", team_id: "tm_a" }],
     })),
+    listRequests: vi.fn(async () => ({
+      ok: true as const,
+      data: [{ id: "req_1", verified: true }],
+    })),
     ...overrides,
   };
 }
@@ -1662,5 +1666,50 @@ describe("bulk replay is always scoped to a configured route", () => {
     });
     expect(result.ok).toBe(false);
     expect(d.client!.bulkReplayRequests).not.toHaveBeenCalled();
+  });
+});
+
+describe("doctor checks that provider verification is actually in force", () => {
+  // A source's TYPE does not enable verification — the provider's secret must
+  // be set too — and a source with one is byte-identical to one without over
+  // the API. Whether arriving requests were verified is the only evidence.
+  it("fails when requests are arriving unverified", async () => {
+    const d = await deps({
+      client: fakeClient({
+        listRequests: vi.fn(async () => ({
+          ok: true as const,
+          data: [
+            { id: "req_1", verified: false },
+            { id: "req_2", verified: true },
+            { id: "req_3", verified: false },
+          ],
+        })),
+      }),
+    });
+
+    const check = (await doctorHandler(d)).checks.find(
+      (c) => c.name === "provider verification",
+    );
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toMatch(/2 of the last 3/);
+    expect(check?.detail).toMatch(/anyone who learns the URL can post to it/);
+  });
+
+  it("passes when they are all verified", async () => {
+    const check = (await doctorHandler(await deps())).checks.find(
+      (c) => c.name === "provider verification",
+    );
+    expect(check?.ok).toBe(true);
+  });
+
+  it("says nothing rather than guessing when no request has arrived yet", async () => {
+    const d = await deps({
+      client: fakeClient({
+        listRequests: vi.fn(async () => ({ ok: true as const, data: [] })),
+      }),
+    });
+    expect(
+      (await doctorHandler(d)).checks.find((c) => c.name === "provider verification"),
+    ).toBeUndefined();
   });
 });

@@ -1187,3 +1187,116 @@ describe("form-encoded providers", () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 });
+
+describe("a deliberate operator retry is not swallowed as a duplicate", () => {
+  // Admission is attempt-count based and does not special-case the trigger:
+  // the trigger arrives in an unsigned header, so honouring it would let
+  // anyone who can replay a body bypass deduplication. Hookdeck increments the
+  // attempt count on a manual retry, which is what admits it.
+  it("admits a MANUAL retry that advances the attempt count", async () => {
+    const { deps, dispatch } = harness();
+    await handleDelivery(deps, request({ attemptCount: "1" }));
+
+    const manual = await handleDelivery(
+      deps,
+      request({
+        attemptCount: "2",
+        extraHeaders: { "x-hookdeck-attempt-trigger": "MANUAL" },
+      }),
+    );
+
+    expect(manual.plan.status).toBe(200);
+    expect(manual.plan.code).toBe("dispatched");
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("admits a manual retry of an event that already succeeded", async () => {
+    // Hookdeck allows retrying a successful event, and an operator doing so
+    // means it. This is also what makes Hookdeck usable as the work queue for
+    // interrupted runs.
+    const { deps, dispatch, ledger } = harness();
+    await handleDelivery(deps, request({ attemptCount: "1" }));
+    expect(ledger.get("evt_1")?.status).toBe("succeeded");
+
+    await handleDelivery(
+      deps,
+      request({
+        attemptCount: "2",
+        extraHeaders: { "x-hookdeck-attempt-trigger": "MANUAL" },
+      }),
+    );
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("still suppresses a replayed attempt that does not advance", async () => {
+    // The trigger header is unsigned, so it cannot be the thing that decides.
+    const { deps, dispatch } = harness();
+    await handleDelivery(deps, request({ attemptCount: "2" }));
+
+    const replayed = await handleDelivery(
+      deps,
+      request({
+        attemptCount: "2",
+        extraHeaders: { "x-hookdeck-attempt-trigger": "MANUAL" },
+      }),
+    );
+    expect(replayed.plan.code).toBe("duplicate");
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a burst past the concurrency cap", () => {
+  // Admission defers rather than queues, and a deferred event is held nowhere:
+  // it only returns when Hookdeck retries it. So the burst that survives is
+  // maxConcurrent x the connection's retry count, and anything beyond that is
+  // lost. This pins the local half of that arithmetic.
+  it("admits exactly maxConcurrent and defers the rest, recording nothing for them", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((r) => {
+      release = r;
+    });
+
+    const { deps, ledger } = harness({
+      config: buildConfig({ maxConcurrent: 2 }),
+      dispatch: async () => {
+        await blocked;
+        return { settle: "succeeded" as const, plan: okPlan("dispatched") };
+      },
+    });
+
+    const inFlight = Array.from({ length: 6 }, (_, i) =>
+      handleDelivery(deps, request({ eventId: `evt_${i}` })),
+    );
+    // Let the first two claim their slots before the rest are judged.
+    await new Promise((r) => setTimeout(r, 10));
+
+    release();
+    const results = await Promise.all(inFlight);
+
+    const deferred = results.filter((r) => r.plan.status === 503);
+    expect(deferred).toHaveLength(4);
+    expect(results.filter((r) => r.plan.status === 200)).toHaveLength(2);
+
+    // Nothing is recorded for a deferred event: a ledger row would make
+    // Hookdeck's redelivery look like a duplicate, and the event would vanish.
+    for (let i = 0; i < 6; i += 1) {
+      const row = ledger.get(`evt_${i}`);
+      if (row !== undefined) expect(row.status).toBe("succeeded");
+    }
+    expect(ledger.stats().entries).toBe(2);
+  });
+
+  it("tells a deferred sender when to come back", async () => {
+    const { deps } = harness({
+      config: buildConfig({ maxConcurrent: 1, busyRetryAfterSeconds: 7 }),
+      dispatch: () => new Promise(() => ({})) as never,
+    });
+
+    void handleDelivery(deps, request({ eventId: "evt_a" }));
+    await new Promise((r) => setTimeout(r, 10));
+    const second = await handleDelivery(deps, request({ eventId: "evt_b" }));
+
+    expect(second.plan.status).toBe(503);
+    expect(second.plan.retry).toEqual({ kind: "after", seconds: 7 });
+  });
+});

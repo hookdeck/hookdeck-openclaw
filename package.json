@@ -47,7 +47,8 @@
     "test:watch": "vitest --exclude \"test/live/**\"",
     "typecheck": "tsc --noEmit",
     "test:live": "vitest run test/live",
-    "test:agent": "bash scripts/agent-smoke.sh"
+    "test:agent": "bash scripts/agent-smoke.sh",
+    "test:package": "bash scripts/test-package.sh"
   },
   "homepage": "https://github.com/hookdeck/hookdeck-openclaw#readme",
   "bugs": {

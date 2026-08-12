@@ -93,3 +93,12 @@ A status tool that returns a page and lets the reader infer a total is worse tha
 - `hookdeck_status.openIssues` and `hookdeck_issues`' `total` come from Hookdeck's count endpoint, not from the length of a page.
 - `hookdeck_recent_deliveries` returns `openIssuesTotal` beside the page it shows, and an `openIssuesTruncated` note whenever the two differ. The local records get the same treatment via `localTruncated`.
 - `hookdeck_status.deadLetters` is the local log's true size, but the log evicts oldest-first at its cap — so once it is full, `deadLettersIsAtLeast: true` says the number is a floor. A floor reported as a floor beats a ceiling reported as a total.
+
+## What `hookdeck_doctor` checks
+
+Beyond the obvious config validation:
+
+- **Provider verification is actually in force.** Setting a source's *type* to STRIPE or GITHUB does not enable signature verification — the provider's signing secret has to be set on the source as well. A source with one is byte-identical to a source without it over the API, because the secret is never returned. So the only evidence is whether the requests that arrived were verified, and that is what this check reads.
+- **The retry rule still covers every status the plugin emits.** A rule narrower than the emitted codes turns admission control into silent data loss.
+- **The CLI and the API key point at the same project.** See [Transport](transport.md#the-two-projects-problem).
+- **The burst each route can absorb**, from `maxConcurrent` and the connection's retry count.
