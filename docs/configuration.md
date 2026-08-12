@@ -43,3 +43,11 @@ These are easy to conflate and they come from different parties:
 Not reimplementing ~145 provider schemes is the point of the integration. Configure verification and Hookdeck does it; leave it out and Hookdeck accepts anything posted to the source URL, which the plugin warns about at startup.
 
 **Route paths match as a prefix, longest first.** Hookdeck appends the source request's path to the destination path unless `path_forwarding_disabled` is set, which is not the default — so a provider posting to `<source-url>/events` arrives at `/hookdeck/stripe/events`. Exact matching would reject perfectly good traffic. A route named `stripe` will not swallow `/hookdeck/stripe-test`; only a further path segment counts.
+
+## Sizing `maxConcurrent` against the retry budget
+
+Admission control answers a `503` when the plugin is at capacity, rather than queueing. A deferred event is held nowhere: it only comes back when Hookdeck retries it. So a burst drains at `maxConcurrent` per retry round, and each event has the connection's retry `count` rounds before Hookdeck gives up.
+
+**The product is the burst that survives.** With the defaults — `maxConcurrent: 4` and a provisioned retry count of 10 — that is roughly 40 simultaneous events. A larger burst exhausts some events' retries while they are still being deferred, and those are lost with an Issue but no way back.
+
+`hookdeck_doctor` reports the number per route, so it is a fact you can look up rather than arithmetic you have to remember.

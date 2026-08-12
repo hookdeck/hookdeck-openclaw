@@ -51,7 +51,12 @@ export interface HookdeckConnection {
   /** How a person refers to it. Issues carry only the id. */
   name?: string;
   paused_at?: string | null;
-  rules?: { type: string; response_status_codes?: string[] }[];
+  rules?: {
+    type: string;
+    response_status_codes?: string[];
+    /** Retry rounds before Hookdeck gives up; sizes the survivable burst. */
+    count?: number;
+  }[];
 }
 
 export interface HookdeckEvent {
@@ -253,8 +258,20 @@ export function createHookdeckClient(
       if (!response.ok) {
         let message = `${response.status} ${response.statusText}`;
         try {
-          const body = (await response.json()) as { message?: string };
-          if (body?.message) message = body.message;
+          const body = (await response.json()) as {
+            message?: string;
+            data?: { message?: string } | string[];
+          };
+          // Hookdeck nests the useful text under `data` for some validation
+          // failures and puts it at the top level for others.
+          const nested =
+            body?.data !== undefined && !Array.isArray(body.data)
+              ? body.data.message
+              : Array.isArray(body?.data)
+                ? body.data.join("; ")
+                : undefined;
+          if (nested) message = nested;
+          else if (body?.message) message = body.message;
         } catch {
           // Non-JSON error body; the status line is enough.
         }
@@ -444,11 +461,27 @@ export function createHookdeckClient(
     },
 
     async bulkReplayRequests(params) {
-      return request<{ id?: string; estimated_count?: number }>(
+      // `target` goes INSIDE `query`, and is required there. Sending it at the
+      // top level is answered `422 query.target is required` — the whole call
+      // fails, having replayed nothing.
+      const result = await request<{ id?: string; estimated_count?: number }>(
         "POST",
         "/bulk/requests/replay",
-        params,
+        { query: { ...params.query, target: params.target } },
       );
+
+      // A window that matches nothing is also a 422, and it is a normal answer
+      // rather than a fault: there was nothing to replay. Distinguished by the
+      // message, since the status is shared with a genuinely malformed body.
+      if (
+        !result.ok &&
+        result.status === 422 &&
+        /does not include any requests/i.test(result.message)
+      ) {
+        return { ok: true, data: { estimated_count: 0 } };
+      }
+
+      return result;
     },
   };
 }

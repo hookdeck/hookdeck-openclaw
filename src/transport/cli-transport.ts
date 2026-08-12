@@ -19,12 +19,17 @@ import { createBackoff, type BackoffOptions } from "./backoff.js";
  *    backoff disguising misconfiguration as flakiness.
  *  - the API key via `env`, never argv, because argv is world-readable in `ps`.
  *
- * One command is deliberately never run: `hookdeck ci --api-key`. It looks like
- * an idempotent login but rewrites the CLI's global config, swaps the stored
- * key for a session key, and switches the active project — which can leave a
- * developer pointed at the wrong project with the original key unrecoverable.
- * Authentication is the operator's business, not a side effect of starting a
- * gateway.
+ * One command is deliberately never run: `hookdeck ci --api-key`. Against the
+ * shared config it rewrites it, swaps the stored key for a session key, and
+ * switches the active project — which can leave a developer pointed at the
+ * wrong project with the original key unrecoverable.
+ *
+ * It does honour `--hookdeck-config`, so a session the plugin owned would not
+ * touch the shared file. That is not the reason for the decision: minting a
+ * CLI session is authentication, and authentication is the operator's business
+ * rather than a side effect of starting a gateway. `hookdeck_doctor` reports a
+ * project mismatch instead, which is the problem the session would have been
+ * papering over.
  */
 
 export interface ChildHandle {

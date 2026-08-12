@@ -178,3 +178,98 @@ describe("rate limiting is distinguishable from a broken event", () => {
     expect(result.ok === false && result.code).toBe("not_found");
   });
 });
+
+describe("bulk replay sends the body the API actually requires", () => {
+  /**
+   * Asserted on the ENCODED body, not on the object handed to the client.
+   * A test that checks the argument before it becomes a request cannot see a
+   * wrong wire shape — and this one was wrong: `target` sent at the top level
+   * is answered `422 query.target is required`, so every catch-up replay
+   * failed having replayed nothing.
+   */
+  function capture() {
+    const sent: { url: string; body: unknown }[] = [];
+    const client = createHookdeckClient({
+      apiKey: "k",
+      fetch: async (url, init) => {
+        sent.push({ url, body: JSON.parse(String(init?.body ?? "{}")) });
+        return new Response(JSON.stringify({ id: "bch_1", estimated_count: 3 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    return { client, sent };
+  }
+
+  it("nests target inside query, where the API requires it", async () => {
+    const { client, sent } = capture();
+    await client.bulkReplayRequests({
+      query: { cli_events_count: 0, ignored_count: { gte: 1 } },
+      target: { webhook_ids: ["web_1"] },
+    });
+
+    expect(sent[0]!.body).toEqual({
+      query: {
+        cli_events_count: 0,
+        ignored_count: { gte: 1 },
+        target: { webhook_ids: ["web_1"] },
+      },
+    });
+  });
+
+  it("sends nothing at the top level except query", async () => {
+    const { client, sent } = capture();
+    await client.bulkReplayRequests({
+      query: { cli_events_count: 0 },
+      target: { webhook_ids: ["web_1"] },
+    });
+    expect(Object.keys(sent[0]!.body as object)).toEqual(["query"]);
+  });
+
+  it("treats a window that matched nothing as success, not failure", async () => {
+    // Hookdeck answers 422 for both a malformed body and an empty match. Only
+    // the second is a normal outcome, and reporting it as an outage would send
+    // an operator looking for a fault that is not there.
+    const client = createHookdeckClient({
+      apiKey: "k",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            code: "UNPROCESSABLE_ENTITY",
+            status: 422,
+            data: {
+              message:
+                "The query filter for the batch operations does not include any requests. Please try a different query filter.",
+            },
+          }),
+          { status: 422, headers: { "content-type": "application/json" } },
+        ),
+    });
+
+    const result = await client.bulkReplayRequests({
+      query: {},
+      target: { webhook_ids: ["web_1"] },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.estimated_count).toBe(0);
+  });
+
+  it("still reports a genuinely malformed body as a failure", async () => {
+    const client = createHookdeckClient({
+      apiKey: "k",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ status: 422, data: ["query.target is required"] }),
+          { status: 422, headers: { "content-type": "application/json" } },
+        ),
+    });
+
+    const result = await client.bulkReplayRequests({
+      query: {},
+      target: { webhook_ids: ["web_1"] },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain("query.target is required");
+  });
+});

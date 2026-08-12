@@ -101,6 +101,25 @@ export async function doctorHandler(deps: ToolDeps) {
       const connection = await deps.client.getConnection(cursor.connectionId);
       if (connection.ok) {
         const retry = connection.data.rules?.find((r) => r.type === "retry");
+        // Admission control defers with a 503 rather than queueing, and a
+        // deferred event is held nowhere — it only comes back on a retry. So a
+        // burst drains at `maxConcurrent` per retry round, and each event has
+        // `count` rounds before Hookdeck gives up. Their product is the burst
+        // size that survives; beyond it, events are lost with an Issue but no
+        // way back.
+        const rounds = retry?.count;
+        if (typeof rounds === "number") {
+          const survivable = deps.config.maxConcurrent * rounds;
+          checks.push({
+            name: `route ${routeId}: burst capacity`,
+            ok: true,
+            detail:
+              `about ${survivable} events (maxConcurrent ${deps.config.maxConcurrent} x ${rounds} retries). ` +
+              `A larger simultaneous burst exhausts its retries while deferred and is lost. ` +
+              `Raise maxConcurrent or the connection's retry count to widen it.`,
+          });
+        }
+
         const missing = uncoveredStatuses(retry?.response_status_codes);
         checks.push({
           name: `route ${routeId}: retry rule`,

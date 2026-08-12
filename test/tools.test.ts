@@ -1594,3 +1594,73 @@ describe("counts are counted, never measured from a page", () => {
     expect((await statusHandler(d, {})).deadLettersIsAtLeast).toBeUndefined();
   });
 });
+
+describe("doctor reports the burst a route can actually absorb", () => {
+  // A deferred event is held nowhere — it only returns on a retry. So a burst
+  // drains at maxConcurrent per retry round, and each event has `count` rounds
+  // before Hookdeck gives up. Beyond the product, events are simply lost.
+  it("multiplies concurrency by the connection's retry count", async () => {
+    const d = await deps(
+      {
+        client: fakeClient({
+          getConnection: vi.fn(async () => ({
+            ok: true as const,
+            data: {
+              id: "web_1",
+              rules: [
+                {
+                  type: "retry",
+                  count: 5,
+                  response_status_codes: [...RETRYABLE_STATUS_CODES],
+                },
+              ],
+            },
+          })),
+        }),
+      },
+      { maxConcurrent: 3 },
+    );
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+
+    const check = (await doctorHandler(d)).checks.find((c) =>
+      c.name.includes("burst capacity"),
+    );
+    expect(check?.detail).toContain("about 15 events");
+    expect(check?.detail).toMatch(/maxConcurrent 3 x 5 retries/);
+  });
+
+  it("says nothing when the rule carries no retry count", async () => {
+    const d = await deps();
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+    const check = (await doctorHandler(d)).checks.find((c) =>
+      c.name.includes("burst capacity"),
+    );
+    expect(check).toBeUndefined();
+  });
+});
+
+describe("bulk replay is always scoped to a configured route", () => {
+  it("targets the route's own connection, never the whole project", async () => {
+    // An unscoped bulk replay matches every failed event in the project, which
+    // usually holds connections belonging to something else entirely.
+    const d = await deps();
+    await d.cursors.patch("stripe", { connectionId: "web_mine" });
+
+    await replayHandler(d, { routeId: "stripe", sinceMinutes: 10, confirm: true });
+
+    expect(d.client!.bulkReplayRequests).toHaveBeenCalledWith(
+      expect.objectContaining({ target: { webhook_ids: ["web_mine"] } }),
+    );
+  });
+
+  it("refuses rather than widening when the route has no connection", async () => {
+    const d = await deps();
+    const result = await replayHandler(d, {
+      routeId: "stripe",
+      sinceMinutes: 10,
+      confirm: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(d.client!.bulkReplayRequests).not.toHaveBeenCalled();
+  });
+});
