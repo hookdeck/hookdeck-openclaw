@@ -63,4 +63,8 @@ Verified end to end: Hookdeck rejects an unparseable JSON body **at the edge**, 
 
 Covered: signature verification of a real delivery; the ledger row that follows it; a manual retry admitted rather than suppressed; a malformed body rejected at Hookdeck's edge; an event stranded by an outage, replayed on reconnect, and confirmed recovered by the batch's own counts; a clean shutdown pausing the connection, an event held at `HOLD`, and its release on restart; boot recovery finding work a dead process left `running` and asking Hookdeck to redeliver it; the plugin provisioning its own connection with a retry rule covering every status it emits; and `hookdeck_doctor` reading the project match and the verification state from real data.
 
-Not covered live, and honest about it: `taskflow` and `agent` dispatch, route filters, `http` transport, the CLI version gate, and provider signature verification at the source — that last one needs a real provider secret, which is dashboard-only.
+Two further suites complete the picture. `npm run test:e2e:dispatch` covers route filters, all three dispatch modes, `http` transport provisioning and the CLI version gate — each asserted on the status Hookdeck itself recorded, which is the half a local test cannot see. `npm run test:e2e:verification` covers provider verification at the source: the plugin provisions a `STRIPE` source from its own config, a correctly signed payload arrives `verified`, and a forged one is refused with `VERIFICATION_FAILED` and produces no event at all.
+
+`npm run test:e2e:all` runs all three, 38 scenarios in total.
+
+> Read `verified` and `rejection_cause`, never the status code. Hookdeck answers **200 at the edge** even while refusing a request — a forged signature returns 200 to the sender and is rejected behind it. A test that checks the status code will report verification as working when it is switched off.
