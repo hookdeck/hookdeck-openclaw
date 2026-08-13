@@ -73,18 +73,28 @@ export async function doctorHandler(deps: ToolDeps) {
   if (deps.client !== undefined) {
     const requests = await deps.client.listRequests({ limit: 20 });
     if (requests.ok && requests.data.length > 0) {
+      // Counted in both directions, and neither inferred from the other. An
+      // absent `verified` means the API did not say, which is not the same as
+      // "verified" and not the same as "forged" — reporting it as either tells
+      // an operator something about their source that has not been observed.
       const unverified = requests.data.filter(
         (r) => r.verified === false,
       ).length;
+      const verified = requests.data.filter((r) => r.verified === true).length;
+
       checks.push({
         name: "provider verification",
         ok: unverified === 0,
         detail:
-          unverified === 0
-            ? `the last ${requests.data.length} inbound request(s) were verified by Hookdeck`
-            : `${unverified} of the last ${requests.data.length} inbound request(s) arrived UNVERIFIED. ` +
+          unverified > 0
+            ? `${unverified} of the last ${requests.data.length} inbound request(s) arrived UNVERIFIED. ` +
               `A source's type does not enable verification on its own — the provider's signing secret ` +
-              `has to be set on the source too, or anyone who learns the URL can post to it.`,
+              `has to be set on the source too, or anyone who learns the URL can post to it.`
+            : verified > 0
+              ? `the last ${verified} inbound request(s) were verified by Hookdeck`
+              : `unknown — the last ${requests.data.length} request(s) carry no verification result, so ` +
+                `whether the source verifies cannot be told from here. Check the source's provider ` +
+                `secret in the Hookdeck dashboard.`,
       });
     }
   }

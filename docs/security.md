@@ -16,6 +16,10 @@ Two suites cover this, because neither is sufficient alone.
 
 `npm run test:e2e:verification` is fully automated. It provisions a source **through the plugin's own config**, so it tests the shape this codebase sends, then posts a correctly signed payload and a forged one. The forged case is the assertion that matters: a source holding a provider secret is byte-identical over the API to one without it, since the secret is never returned, so the only proof verification is switched on is that an invalid signature is refused — `verified: false`, `rejection_cause: VERIFICATION_FAILED`, and no event created.
 
+`hookdeck_doctor` reads that field, and reports **unknown** when no request carries a result — neither "verified" nor "unverified" is inferred from the API's silence. Both errors are the same mistake in opposite directions: one tells an operator their source is protected when nothing was observed, the other that it accepts forgeries when the API simply did not say.
+
+Note also that only a **generic** `WEBHOOK` source reports `config.auth_type` back. A platform-typed source with a provider secret and one without return byte-identical config, so for those there is no signal at all short of an inbound request.
+
 `scripts/e2e-live-stripe.mjs` closes what synthesis cannot reach: a real webhook from Stripe. It found that a real `Stripe-Signature` carries three schemes, not the two in the documented example —
 
 ```

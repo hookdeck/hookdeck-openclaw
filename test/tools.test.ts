@@ -1758,3 +1758,46 @@ describe("doctor names the likeliest cause of a missing retry rule", () => {
     expect(check?.detail).toMatch(/does NOT cover/);
   });
 });
+
+describe("verification state is never inferred from silence", () => {
+  const withRequests = (data: unknown[]) =>
+    deps({
+      client: fakeClient({
+        listRequests: vi.fn(async () => ({ ok: true as const, data })),
+      }),
+    });
+  const check = async (data: unknown[]) =>
+    (await doctorHandler(await withRequests(data))).checks.find(
+      (c) => c.name === "provider verification",
+    );
+
+  it("reports unknown when no request carries a result", async () => {
+    // Saying "verified" here would tell an operator their source is protected
+    // on the strength of a field the API never sent.
+    const c = await check([{ id: "req_1" }, { id: "req_2" }]);
+    expect(c?.ok).toBe(true);
+    expect(c?.detail).toMatch(/^unknown/);
+  });
+
+  it("does not treat an absent result as a forgery either", async () => {
+    // The opposite error: telling someone their source accepts forgeries
+    // because the API stayed quiet.
+    const c = await check([{ id: "req_1" }]);
+    expect(c?.detail).not.toMatch(/UNVERIFIED/);
+  });
+
+  it("counts only what was actually reported verified", async () => {
+    const c = await check([
+      { id: "a", verified: true },
+      { id: "b" },
+      { id: "c", verified: true },
+    ]);
+    expect(c?.detail).toMatch(/last 2 inbound request/);
+  });
+
+  it("still fails loudly on a genuine unverified request", async () => {
+    const c = await check([{ id: "a", verified: true }, { id: "b", verified: false }]);
+    expect(c?.ok).toBe(false);
+    expect(c?.detail).toMatch(/1 of the last 2/);
+  });
+});
