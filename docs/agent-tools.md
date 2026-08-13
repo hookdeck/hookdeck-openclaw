@@ -4,16 +4,16 @@ The eight tools an agent can call, what each returns, and the rails on the ones 
 
 Eight tools. Five are the operator verbs — `setup`, `status`, `pause`/`resume`, `replay`, `doctor` — plus three an agent host benefits from more than a CLI does. Two of those correlate what Hookdeck saw with what we did (`hookdeck_recent_deliveries`, `hookdeck_inspect_event`); the third, `hookdeck_issues`, is the dead-letter queue's own lifecycle.
 
-| Tool | Answers |
-|---|---|
-| `hookdeck_status` | "Are webhooks working?" — routes, capacity, ledger persistence, dead-letter count, open issues, transport state, config warnings |
-| `hookdeck_recent_deliveries` | "Did anything break overnight?" — open Hookdeck Issues, plus failures Hookdeck cannot see |
-| `hookdeck_inspect_event` | "Why did *this* one fail?" — our row and reason beside Hookdeck's status and full attempt history; payload on request |
-| `hookdeck_doctor` | What's misconfigured, including whether each connection's retry rule still covers every status we emit |
-| `hookdeck_setup` | Provisions connections. Dry run by default |
-| `hookdeck_pause` | Pause/resume a connection. Auto-resumes within an hour |
-| `hookdeck_replay` | **Retries** specific events (`eventIds`), or runs a scoped bulk **replay** of requests (`routeId` + `sinceMinutes`). Dry run unless `confirm: true`. Caps at 100 ids per call and says what it dropped |
-| `hookdeck_issues` | The dead-letter queue's lifecycle: list, acknowledge, resolve, ignore, dismiss. Replays nothing, and says so |
+| Tool                         | Answers                                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `hookdeck_status`            | "Are webhooks working?" — routes, capacity, ledger persistence, dead-letter count, open issues, transport state, config warnings                                                                       |
+| `hookdeck_recent_deliveries` | "Did anything break overnight?" — open Hookdeck Issues, plus failures Hookdeck cannot see                                                                                                              |
+| `hookdeck_inspect_event`     | "Why did _this_ one fail?" — our row and reason beside Hookdeck's status and full attempt history; payload on request                                                                                  |
+| `hookdeck_doctor`            | What's misconfigured, including whether each connection's retry rule still covers every status we emit                                                                                                 |
+| `hookdeck_setup`             | Provisions connections. Dry run by default                                                                                                                                                             |
+| `hookdeck_pause`             | Pause/resume a connection. Auto-resumes within an hour                                                                                                                                                 |
+| `hookdeck_replay`            | **Retries** specific events (`eventIds`), or runs a scoped bulk **replay** of requests (`routeId` + `sinceMinutes`). Dry run unless `confirm: true`. Caps at 100 ids per call and says what it dropped |
+| `hookdeck_issues`            | The dead-letter queue's lifecycle: list, acknowledge, resolve, ignore, dismiss. Replays nothing, and says so                                                                                           |
 
 `tools.allowMutations: false` reduces this to the five read tools — `hookdeck_issues` stays, able to list and inspect but not acknowledge, resolve or dismiss — for an agent that can diagnose but not act.
 
@@ -39,16 +39,16 @@ Each result carries `source: "live" | "disk"`. On a disk view, in-flight capacit
 Hookdeck distinguishes them, so this plugin does too:
 
 - **Retry** (`POST /events/{id}/retry`) makes a new delivery attempt for an existing event. The event id is unchanged and the attempt count goes up.
-- **Replay** (`POST /bulk/requests/replay`) re-ingests the original *requests* through the pipeline, producing **new events with new ids**. The originals are untouched.
+- **Replay** (`POST /bulk/requests/replay`) re-ingests the original _requests_ through the pipeline, producing **new events with new ids**. The originals are untouched.
 
 Almost everything here is a retry: crash recovery re-queuing interrupted work, an agent run asking for another delivery, and `hookdeck_replay` when given explicit `eventIds`. Only catch-up after an outage is a true replay, because the events it needs never existed — the requests arrived while no CLI session was attached, so Hookdeck discarded them rather than creating events to retry.
 
 That distinction decides whether deduplication can protect you:
 
-| | Ledger sees | Suppressed? |
-|---|---|---|
-| Retry | Same event id, higher attempt | Admitted by the attempt rule, and a duplicate of an already-handled attempt is rejected |
-| Replay | A brand-new event id | Admitted as a first delivery — **the ledger has no way to know it is related to anything** |
+|        | Ledger sees                   | Suppressed?                                                                                |
+| ------ | ----------------------------- | ------------------------------------------------------------------------------------------ |
+| Retry  | Same event id, higher attempt | Admitted by the attempt rule, and a duplicate of an already-handled attempt is rejected    |
+| Replay | A brand-new event id          | Admitted as a first delivery — **the ledger has no way to know it is related to anything** |
 
 So a replay of requests that already ran successfully **will run the work again**. That is why every replay path here is scoped to requests that produced no event at all (`cli_events_count: 0`, `ignored_count >= 1`) rather than to a bare time window, and why the tool insists on `confirm: true`. If you need protection against a broader replay, `route.dedupe.idPath` keys deduplication on a provider-native id in the payload, which survives re-ingestion.
 
@@ -61,7 +61,7 @@ The local log holds only the residue Hookdeck is structurally blind to, created 
 - an agent run that failed **after** we returned `202`, once its retry budget is spent;
 - work interrupted by a crash between the acknowledgement and completion.
 
-In both cases Hookdeck recorded a *successful* delivery, so no Issue will ever open and nothing else knows they happened. Those come back as `unreportedFailures`.
+In both cases Hookdeck recorded a _successful_ delivery, so no Issue will ever open and nothing else knows they happened. Those come back as `unreportedFailures`.
 
 Pre-acknowledgement rejections — a cancelled retry, a final failed attempt — are mirrored locally only as a convenience where Issues are unreachable, and are returned separately as `locallyRecorded` so a reader knows to prefer the Issue. Two cases make that mirror worth keeping: deployments with no API key, and **CLI destinations, which support no issue triggers at all** — so in local development the local log is the only record there is.
 
@@ -69,10 +69,10 @@ Pre-acknowledgement rejections — a cancelled retry, a final failed attempt —
 
 Deliberately not reimplemented, listed because the temptation is real:
 
-- **Provider signature verification** (Stripe, GitHub, Shopify, ~145 others) happens at the Hookdeck Source via `verification.provider` + `credentials`. An unverified request is rejected at the Request layer, so no event is created and nothing reaches the agent. `signingSecret` is a different thing entirely — Hookdeck's own secret for signing deliveries *to us*.
+- **Provider signature verification** (Stripe, GitHub, Shopify, ~145 others) happens at the Hookdeck Source via `verification.provider` + `credentials`. An unverified request is rejected at the Request layer, so no event is created and nothing reaches the agent. `signingSecret` is a different thing entirely — Hookdeck's own secret for signing deliveries _to us_.
 - **Retries and backoff** are the connection's retry rule. We only choose the status code that decides what it does next.
-- **Concurrency limiting** is pushed into the destination as `rate_limit_period: "concurrent"` in HTTP mode, because Hookdeck paces delivery where our local admission control has to answer `503` — spending one of the event's finite attempts to say "not now". The local limit stays as a backstop, and is the *only* control under CLI transport, where destinations carry no `rate_limit` field.
-- **Payload deduplication** of a double-firing provider is the connection's `deduplicate` rule. Our ledger solves a different problem — deciding whether an incoming *attempt* is a legitimate redelivery or a duplicate — which no server-side rule can answer for us.
+- **Concurrency limiting** is pushed into the destination as `rate_limit_period: "concurrent"` in HTTP mode, because Hookdeck paces delivery where our local admission control has to answer `503` — spending one of the event's finite attempts to say "not now". The local limit stays as a backstop, and is the _only_ control under CLI transport, where destinations carry no `rate_limit` field.
+- **Payload deduplication** of a double-firing provider is the connection's `deduplicate` rule. Our ledger solves a different problem — deciding whether an incoming _attempt_ is a legitimate redelivery or a duplicate — which no server-side rule can answer for us.
 - **Holding events during a restart** is `PUT /connections/{id}/pause`; **catch-up** is bulk replay. Both are API calls, not local queues.
 
 Route `filters` are the one deliberate overlap. Hookdeck can filter server-side and doing it there is better — a filtered event never reaches the agent and costs nothing — so the local ones exist only for decisions a connection cannot express.
@@ -84,7 +84,7 @@ Payload text from a webhook is third-party input, and the tools treat it that wa
 - Signature, `Authorization`, cookie and token headers are redacted before an inspected event's headers are returned.
 - The delivered body is **opt-in** (`includeBody`), truncated at 4,000 characters, and labelled as data rather than presented as something addressed to the reader.
 - The `hookdeck listen` child's output is scrubbed of the API key as it is captured, not as it is read — that output is surfaced by `hookdeck_status` and we do not write it, so a future CLI version echoing a key into a banner would otherwise land it in a model's context with nothing here having changed.
-- A test asserts that no configured secret appears in *any* tool's result, so the next tool added inherits the check.
+- A test asserts that no configured secret appears in _any_ tool's result, so the next tool added inherits the check.
 
 ## Counts are counted
 
@@ -98,7 +98,7 @@ A status tool that returns a page and lets the reader infer a total is worse tha
 
 Beyond the obvious config validation:
 
-- **Provider verification is actually in force.** Setting a source's *type* to STRIPE or GITHUB does not enable signature verification — the provider's signing secret has to be set on the source as well. A source with one is byte-identical to a source without it over the API, because the secret is never returned. So the only evidence is whether the requests that arrived were verified, and that is what this check reads.
+- **Provider verification is actually in force.** Setting a source's _type_ to STRIPE or GITHUB does not enable signature verification — the provider's signing secret has to be set on the source as well. A source with one is byte-identical to a source without it over the API, because the secret is never returned. So the only evidence is whether the requests that arrived were verified, and that is what this check reads.
 - **The retry rule still covers every status the plugin emits.** A rule narrower than the emitted codes turns admission control into silent data loss.
 - **The CLI and the API key point at the same project.** See [Transport](transport.md#the-two-projects-problem).
 - **The burst each route can absorb**, from `maxConcurrent` and the connection's retry count.

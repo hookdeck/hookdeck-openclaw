@@ -24,4 +24,4 @@ t=1786615…,v1=e798bfb…,v0=6260368…
 
 — and Hookdeck verified it regardless. The run also produced its own control group: requests that arrived before the source was armed came in `VERIFICATION_FAILED`, and the same endpoint verified cleanly a minute later once the secret was set.
 
-> **Read `verified` and `rejection_cause`, never the status code.** Hookdeck answers **200 at the edge** while refusing a request. A test that checks the status will report verification as working when it is switched off.
+> **Read `verified` and `rejection_cause`. Never infer verification from the status code, in either direction.** The edge does not answer uniformly: a forged Stripe signature is answered **200**, with `verified: false` and `rejection_cause: VERIFICATION_FAILED` recorded behind it, while a forged GitHub signature is rejected with a non-2xx. Measured on the same project, same API version. A test asserting either shape passes for one provider and fails for the other.

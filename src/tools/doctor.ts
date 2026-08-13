@@ -151,7 +151,12 @@ export async function doctorHandler(deps: ToolDeps) {
           detail:
             missing.length === 0
               ? `covers ${RETRYABLE_STATUS_CODES.join(", ")}`
-              : `does NOT cover ${missing.join(", ")} — events answered with those codes will never be retried`,
+              : retry === undefined
+                ? `there is NO retry rule on this connection, so nothing this plugin answers ` +
+                  `with a retryable status is ever redelivered. A connection created by ` +
+                  `\`hookdeck listen\` has none by default — run hookdeck_setup, or add a retry ` +
+                  `rule covering ${RETRYABLE_STATUS_CODES.join(", ")}.`
+                : `does NOT cover ${missing.join(", ")} — events answered with those codes will never be retried`,
         });
       }
     }

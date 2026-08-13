@@ -29,7 +29,7 @@ The `hookdeck` binary is resolved explicitly on `PATH` and the plugin **warns wh
 
 On shutdown the connection is **paused before** the listener is stopped. That order is the whole point: a clean CLI shutdown tombstones the session immediately and forfeits the server's ~2 minute grace window, so events arriving next become `CLI_DISCONNECTED` ignored events and their requests are discarded. Paused, they are held at `HOLD` and delivered on the next start with attempt trigger `UNPAUSE`.
 
-The `pausedByUs` marker is written *before* the pause call, so a crash in between still leaves the breadcrumb that unpauses on the next start — a connection left paused forever is a silent outage.
+The `pausedByUs` marker is written _before_ the pause call, so a crash in between still leaves the breadcrumb that unpauses on the next start — a connection left paused forever is a silent outage.
 
 `lastDisconnectAt` is written on **every** listener exit, clean or otherwise. It is the only durable evidence of an outage window, and the catch-up replay needs it to bound its query: `bulk/requests/replay` is the only path that can be time-scoped, since `bulk/ignored-events/retry` takes no date filter and there is no project-wide `GET /ignored-events` to enumerate with.
 

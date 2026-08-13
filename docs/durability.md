@@ -22,7 +22,7 @@ Without `apiKey`, orphans are still detected, settled and dead-lettered — they
 
 `safety.allowRetryCancel` lets the plugin answer `Retry-After: -1` on permanently-invalid input — malformed JSON, a body that will never fit — which tells Hookdeck to stop retrying instead of burning all 50 attempts on something that cannot succeed.
 
-**It is off by default, and that default is deliberate.** A mistake here discards real traffic, and the events are gone once retention lapses (3 days on the free plan). Cancellation is only ever emitted from a closed allowlist of reasons, always dead-letters first, and never fires for anything a config change could fix — a missing secret, an unresolvable secretRef or a storage failure all stay retryable. Turn it on once you have watched the logs and seen what it *would* have cancelled.
+**It is off by default, and that default is deliberate.** A mistake here discards real traffic, and the events are gone once retention lapses (3 days on the free plan). Cancellation is only ever emitted from a closed allowlist of reasons, always dead-letters first, and never fires for anything a config change could fix — a missing secret, an unresolvable secretRef or a storage failure all stay retryable. Turn it on once you have watched the logs and seen what it _would_ have cancelled.
 
 ## A crash that never ran its shutdown
 
@@ -38,10 +38,10 @@ Within Hookdeck's retention, catch-up recovers every request that arrived during
 
 **The filter matches every way a request can be stranded.** Measured against a live project, the two disconnect regimes look different:
 
-| | `events_count` | `ignored_count` |
-|---|---|---|
-| The tunnel never existed | 0 | 1 |
-| The tunnel connected, then the process was killed | 0 | **0** |
+|                                                   | `events_count` | `ignored_count` |
+| ------------------------------------------------- | -------------- | --------------- |
+| The tunnel never existed                          | 0              | 1               |
+| The tunnel connected, then the process was killed | 0              | **0**           |
 
 The second is the hard-crash case. It matches neither `ignored_count >= 1` nor `cli_events_count: 0` — that field is not populated when no CLI event was ever created — so a filter using either excludes precisely the case catch-up exists for. The query keys on `events_count: 0` alone.
 
@@ -67,4 +67,4 @@ Two further suites complete the picture. `npm run test:e2e:dispatch` covers rout
 
 `npm run test:e2e:all` runs all three, 38 scenarios in total.
 
-> Read `verified` and `rejection_cause`, never the status code. Hookdeck answers **200 at the edge** even while refusing a request — a forged signature returns 200 to the sender and is rejected behind it. A test that checks the status code will report verification as working when it is switched off.
+> Read `verified` and `rejection_cause`, never the status code. The edge does not refuse uniformly — a forged Stripe signature is answered 200 with the rejection recorded behind it, while GitHub is rejected outright — so no status-code assertion holds across providers.

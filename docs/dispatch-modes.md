@@ -4,11 +4,11 @@ What a verified event actually does when it arrives: wake a session, apply a Tas
 
 Each route picks one.
 
-| Mode | What it does | Use it for |
-|---|---|---|
-| `wake` | Enqueues a system event and, by default, requests an immediate heartbeat. | "Something happened, look at it." Cheapest option. |
-| `taskflow` | Body is a TaskFlow action envelope (`create_flow`, `run_task`, `finish_flow`, …), applied against a bound session. | Automation sources that already speak OpenClaw's vocabulary — n8n, Zapier, CI. |
-| `agent` | Renders the payload into a prompt and runs an isolated turn. | Raw provider webhooks. A Stripe body is not a TaskFlow envelope and never will be, so this is the mode that works with any of Hookdeck's ~145 verified providers on day one. |
+| Mode       | What it does                                                                                                       | Use it for                                                                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wake`     | Enqueues a system event and, by default, requests an immediate heartbeat.                                          | "Something happened, look at it." Cheapest option.                                                                                                                           |
+| `taskflow` | Body is a TaskFlow action envelope (`create_flow`, `run_task`, `finish_flow`, …), applied against a bound session. | Automation sources that already speak OpenClaw's vocabulary — n8n, Zapier, CI.                                                                                               |
+| `agent`    | Renders the payload into a prompt and runs an isolated turn.                                                       | Raw provider webhooks. A Stripe body is not a TaskFlow envelope and never will be, so this is the mode that works with any of Hookdeck's ~145 verified providers on day one. |
 
 ## TaskFlow semantics
 

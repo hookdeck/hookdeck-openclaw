@@ -1717,3 +1717,44 @@ describe("doctor checks that provider verification is actually in force", () => 
     ).toBeUndefined();
   });
 });
+
+describe("doctor names the likeliest cause of a missing retry rule", () => {
+  it("says there is no rule at all, rather than listing every code as uncovered", async () => {
+    // `hookdeck listen` creates connections with rules: [], so anyone who
+    // followed the quickstart's tunnel step has no retries whatsoever — and
+    // "does not cover 400, 401, ..." reads like a narrow rule, not an absent one.
+    const d = await deps({
+      client: fakeClient({
+        getConnection: vi.fn(async () => ({
+          ok: true as const,
+          data: { id: "web_1", rules: [] },
+        })),
+      }),
+    });
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+
+    const check = (await doctorHandler(d)).checks.find((c) =>
+      c.name.includes("retry rule"),
+    );
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toMatch(/NO retry rule/);
+    expect(check?.detail).toMatch(/hookdeck listen/);
+  });
+
+  it("still describes a narrow rule as narrow", async () => {
+    const d = await deps({
+      client: fakeClient({
+        getConnection: vi.fn(async () => ({
+          ok: true as const,
+          data: { id: "web_1", rules: [{ type: "retry", response_status_codes: ["500-599"] }] },
+        })),
+      }),
+    });
+    await d.cursors.patch("stripe", { connectionId: "web_1" });
+
+    const check = (await doctorHandler(d)).checks.find((c) =>
+      c.name.includes("retry rule"),
+    );
+    expect(check?.detail).toMatch(/does NOT cover/);
+  });
+});

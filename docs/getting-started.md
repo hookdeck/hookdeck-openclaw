@@ -14,7 +14,6 @@ Local development, from a clone:
 openclaw plugins install --link ./hookdeck-openclaw
 ```
 
-
 ## Quickstart
 
 **1. Get your signing secret** from the Hookdeck dashboard: Settings → Project → Secrets. It is project-level, not per-connection.
@@ -28,7 +27,11 @@ openclaw plugins install --link ./hookdeck-openclaw
       "hookdeck": {
         "enabled": true,
         "config": {
-          "signingSecret": { "source": "env", "provider": "env", "id": "HOOKDECK_SIGNING_SECRET" },
+          "signingSecret": {
+            "source": "env",
+            "provider": "env",
+            "id": "HOOKDECK_SIGNING_SECRET"
+          },
           "routes": {
             "stripe": {
               "source": "stripe",
