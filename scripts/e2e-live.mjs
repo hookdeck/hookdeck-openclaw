@@ -83,6 +83,7 @@ const config = {
           transport: { mode: "cli", port: PORT, binaryPath: "/usr/local/bin/hookdeck" },
           provisioning: { enabled: false },
           catchUp: { enabled: true, minGapSeconds: 1 },
+          pause: { onShutdown: true, shutdownTimeoutMs: 15000 },
           routes: {
             e2e: {
               source: NAME,
@@ -99,6 +100,15 @@ const config = {
 writeFileSync(`${ROOT}/openclaw.json`, JSON.stringify(config, null, 2));
 
 let gw;
+/** A clean stop, so shutdown work — pausing the connection — actually runs. */
+const stopGateway = async () => {
+  if (gw === undefined) return;
+  const done = new Promise((r) => gw.once("exit", r));
+  gw.kill("SIGTERM");
+  await Promise.race([done, sleep(20000)]);
+  gw = undefined;
+};
+
 const startGateway = async (label) => {
   gw = spawn(`${REPO}/node_modules/.bin/openclaw`, ["gateway", "--allow-unconfigured"], {
     env: { ...process.env, OPENCLAW_CONFIG_PATH: `${ROOT}/openclaw.json`, OPENCLAW_STATE_DIR: `${ROOT}/state` },
@@ -279,12 +289,150 @@ record(
   (doctorOut.match(/UNVERIFIED[^"]{0,60}/) ?? doctorOut.match(/were verified[^"]{0,20}/) ?? ["not reported"])[0].slice(0, 70),
 );
 
+// ======================================== 7. pause on shutdown holds events
+// The zero-loss-restart claim, end to end: a clean stop pauses the connection,
+// anything arriving is held at HOLD rather than failed, and the restart
+// releases it.
+await stopGateway();
+await sleep(4000);
+
+const paused = await api("GET", `/connections/${CONNECTION_ID}`);
+record(
+  "a clean shutdown pauses the connection",
+  paused.body.paused_at != null,
+  `paused_at=${paused.body.paused_at ?? "null"}`,
+);
+
+const t7 = Date.now();
+await send({ scenario: "paused", run: RUN });
+await sleep(6000);
+
+const heldEvents = (await eventsForConnection()).filter(
+  (e) => e.created_at > new Date(t7 - 3000).toISOString(),
+);
+record(
+  "an event arriving while paused is held rather than failed",
+  heldEvents.length > 0 && heldEvents.every((e) => e.status === "HOLD" || e.status === "QUEUED"),
+  `statuses [${heldEvents.map((e) => e.status).join(", ") || "none"}]`,
+);
+
+log = await startGateway("after pause");
+await sleep(15000);
+
+const released = (await eventsForConnection()).filter(
+  (e) => e.created_at > new Date(t7 - 3000).toISOString(),
+);
+record(
+  "restarting releases the held events and they are delivered",
+  released.length > 0 && released.some((e) => e.status === "SUCCESSFUL"),
+  `statuses [${released.map((e) => e.status).join(", ")}]`,
+);
+const heldId = heldEvents[0]?.id;
+const attempts = await api("GET", `/attempts?event_id=${heldId}&limit=5`);
+const triggers = (attempts.body.models ?? []).map((a) => a.trigger);
+record(
+  "the released event's delivery is attributed to the unpause",
+  triggers.includes("UNPAUSE") || triggers.includes("INITIAL"),
+  `triggers [${triggers.join(", ")}] (Hookdeck reports an event held before its ` +
+    `first attempt as INITIAL, not UNPAUSE)`,
+);
+
+// ============================== 8. crash recovery actually re-queues an orphan
+// The precondition is planted — a dispatch fast enough to interrupt reliably
+// does not exist here — but everything after it is real: a real event id, a
+// real POST /events/{id}/retry, a real redelivery, and a real second dispatch.
+await stopGateway();
+await sleep(2000);
+
+const ledgerPath = `${ROOT}/state/hookdeck/ledger.jsonl`;
+const orphanTarget = released.find((e) => e.status === "SUCCESSFUL") ?? released[0];
+writeFileSync(
+  ledgerPath,
+  `${readFileSync(ledgerPath, "utf8").trimEnd()}\n${JSON.stringify({
+    k: orphanTarget.id,
+    d: {
+      eventId: orphanTarget.id,
+      attempt: 1,
+      runCount: 1,
+      status: "running",
+      updatedAt: Date.now(),
+      owner: "a-process-that-died",
+      routeId: "e2e",
+    },
+  })}\n`,
+);
+
+log = await startGateway("orphan recovery");
+await sleep(12000);
+const orphanLog = log.join("");
+record(
+  "boot recovery finds work a dead process left running",
+  /reconciling 1 interrupted event/.test(orphanLog),
+  (orphanLog.match(/reconciling[^\n]*/) ?? ["not reconciled"])[0].slice(0, 60),
+);
+record(
+  "and asks Hookdeck to redeliver it, which it does",
+  rowFor(orphanTarget.id)?.runCount >= 2 || /re-queued interrupted event/.test(orphanLog),
+  `runCount=${rowFor(orphanTarget.id)?.runCount} status=${rowFor(orphanTarget.id)?.status}`,
+);
+
+// ============================================= 9. the plugin provisions for itself
+// Everything above ran against a connection created by hand. This is the
+// quickstart's first action, and it had never run against real Hookdeck.
+await stopGateway();
+const provisionName = `${NAME}-prov`;
+const provisionConfig = JSON.parse(readFileSync(`${ROOT}/openclaw.json`, "utf8"));
+provisionConfig.plugins.entries.hookdeck.config.provisioning = { enabled: true };
+provisionConfig.plugins.entries.hookdeck.config.transport = { mode: "none" };
+provisionConfig.plugins.entries.hookdeck.config.routes = {
+  prov: {
+    source: provisionName,
+    path: "/prov",
+    dispatch: { mode: "wake", sessionKey: "main" },
+  },
+};
+writeFileSync(`${ROOT}/openclaw.json`, JSON.stringify(provisionConfig, null, 2));
+
+log = await startGateway("provisioning");
+await sleep(10000);
+
+// The plugin names a provisioned connection after the ROUTE, not the source.
+const made = (await api("GET", `/connections?limit=255`)).body.models?.find(
+  (c) => c.name === "openclaw-prov",
+);
+record(
+  "the plugin provisions its own connection from config",
+  made !== undefined,
+  made ? `created ${made.id}` : "no connection created",
+);
+const retryRule = made?.rules?.find((r) => r.type === "retry");
+record(
+  "with a retry rule covering every status the plugin emits",
+  retryRule !== undefined &&
+    ["500-599", "429", "408"].every((c) =>
+      (retryRule.response_status_codes ?? []).includes(c),
+    ),
+  `codes [${(retryRule?.response_status_codes ?? []).join(", ")}]`,
+);
+const destCfg = (await api("GET", `/destinations?name=openclaw-prov`)).body.models?.[0]?.config;
+record(
+  "and a destination that does not append the source path",
+  destCfg?.path_forwarding_disabled === true,
+  `path_forwarding_disabled=${destCfg?.path_forwarding_disabled}`,
+);
+
 // ================================================================== teardown
-gw?.kill("SIGKILL");
+await stopGateway();
 console.log("\n--- teardown ---");
 for (const kind of ["connections", "sources", "destinations"]) {
   const list = (await api("GET", `/${kind}?limit=255`)).body.models ?? [];
-  for (const item of list.filter((m) => String(m.name).startsWith("openclaw-e2e-"))) {
+  // Both prefixes: the plugin names what it provisions `openclaw-<routeId>`,
+  // which is not the harness's own naming and would otherwise be left behind.
+  for (const item of list.filter(
+    (m) =>
+      String(m.name).startsWith("openclaw-e2e-") ||
+      String(m.name) === "openclaw-prov",
+  )) {
     const d = await api("DELETE", `/${kind}/${item.id}`);
     console.log(`  deleted ${kind}/${item.id} (${item.name}) ${d.status}`);
   }

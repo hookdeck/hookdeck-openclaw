@@ -56,3 +56,11 @@ What it cannot do is recover anything Hookdeck has already aged out — 3 days o
 ## Malformed bodies never reach the plugin
 
 Verified end to end: Hookdeck rejects an unparseable JSON body **at the edge**, answering the sender `400` with `rejection_cause: UNPARSABLE_JSON` and creating no event. The plugin's own `malformed_json` handling is therefore defence in depth rather than a path real traffic takes — it covers a body that survives the edge and fails here, such as one that is valid JSON but not valid UTF-8.
+
+## What has been proven against a live project
+
+`npm run test:e2e` runs 23 scenarios against a real Hookdeck project — a real source, a tunnel supervised by the plugin itself, real events and real retries — creating everything under a scoped name and deleting it afterwards.
+
+Covered: signature verification of a real delivery; the ledger row that follows it; a manual retry admitted rather than suppressed; a malformed body rejected at Hookdeck's edge; an event stranded by an outage, replayed on reconnect, and confirmed recovered by the batch's own counts; a clean shutdown pausing the connection, an event held at `HOLD`, and its release on restart; boot recovery finding work a dead process left `running` and asking Hookdeck to redeliver it; the plugin provisioning its own connection with a retry rule covering every status it emits; and `hookdeck_doctor` reading the project match and the verification state from real data.
+
+Not covered live, and honest about it: `taskflow` and `agent` dispatch, route filters, `http` transport, the CLI version gate, and provider signature verification at the source — that last one needs a real provider secret, which is dashboard-only.
