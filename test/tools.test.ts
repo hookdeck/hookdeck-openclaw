@@ -1654,7 +1654,11 @@ describe("bulk replay is always scoped to a configured route", () => {
     const d = await deps();
     await d.cursors.patch("stripe", { connectionId: "web_mine" });
 
-    await replayHandler(d, { routeId: "stripe", sinceMinutes: 10, confirm: true });
+    await replayHandler(d, {
+      routeId: "stripe",
+      sinceMinutes: 10,
+      confirm: true,
+    });
 
     expect(d.client!.bulkReplayRequests).toHaveBeenCalledWith(
       expect.objectContaining({ target: { webhook_ids: ["web_mine"] } }),
@@ -1713,7 +1717,9 @@ describe("doctor checks that provider verification is actually in force", () => 
       }),
     });
     expect(
-      (await doctorHandler(d)).checks.find((c) => c.name === "provider verification"),
+      (await doctorHandler(d)).checks.find(
+        (c) => c.name === "provider verification",
+      ),
     ).toBeUndefined();
   });
 });
@@ -1746,7 +1752,10 @@ describe("doctor names the likeliest cause of a missing retry rule", () => {
       client: fakeClient({
         getConnection: vi.fn(async () => ({
           ok: true as const,
-          data: { id: "web_1", rules: [{ type: "retry", response_status_codes: ["500-599"] }] },
+          data: {
+            id: "web_1",
+            rules: [{ type: "retry", response_status_codes: ["500-599"] }],
+          },
         })),
       }),
     });
@@ -1760,13 +1769,14 @@ describe("doctor names the likeliest cause of a missing retry rule", () => {
 });
 
 describe("verification state is never inferred from silence", () => {
-  const withRequests = (data: unknown[]) =>
+  type RequestRow = { id: string; verified?: boolean | null };
+  const withRequests = (data: RequestRow[]) =>
     deps({
       client: fakeClient({
         listRequests: vi.fn(async () => ({ ok: true as const, data })),
       }),
     });
-  const check = async (data: unknown[]) =>
+  const check = async (data: RequestRow[]) =>
     (await doctorHandler(await withRequests(data))).checks.find(
       (c) => c.name === "provider verification",
     );
@@ -1796,7 +1806,10 @@ describe("verification state is never inferred from silence", () => {
   });
 
   it("still fails loudly on a genuine unverified request", async () => {
-    const c = await check([{ id: "a", verified: true }, { id: "b", verified: false }]);
+    const c = await check([
+      { id: "a", verified: true },
+      { id: "b", verified: false },
+    ]);
     expect(c?.ok).toBe(false);
     expect(c?.detail).toMatch(/1 of the last 2/);
   });

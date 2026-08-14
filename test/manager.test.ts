@@ -896,7 +896,11 @@ describe("catch-up reports what Hookdeck actually recovered", () => {
 
   it("reports the counts Hookdeck settled on", async () => {
     const result = await runCatchUp({
-      client: withBatch({ completed_at: "now", completed_count: 3, estimated_count: 3 }) as never,
+      client: withBatch({
+        completed_at: "now",
+        completed_count: 3,
+        estimated_count: 3,
+      }) as never,
       logger: silent,
       connectionId: "web_1",
       sinceMs: 1000,
@@ -908,14 +912,22 @@ describe("catch-up reports what Hookdeck actually recovered", () => {
 
     expect(result.ran).toBe(true);
     if (result.ran) {
-      expect(result.recovered).toMatchObject({ complete: true, replayed: 3, planned: 3 });
+      expect(result.recovered).toMatchObject({
+        complete: true,
+        replayed: 3,
+        planned: 3,
+      });
     }
   });
 
   it("warns when the batch replayed fewer than it planned", async () => {
     const warnings: string[] = [];
     await runCatchUp({
-      client: withBatch({ completed_at: "now", completed_count: 1, estimated_count: 4 }) as never,
+      client: withBatch({
+        completed_at: "now",
+        completed_count: 1,
+        estimated_count: 4,
+      }) as never,
       logger: { ...silent, warn: (m: string) => warnings.push(m) },
       connectionId: "web_1",
       sinceMs: 1000,
@@ -964,7 +976,10 @@ describe("catch-up waits for the batch before judging it", () => {
         polls += 1;
         return {
           ok: true as const,
-          data: polls < 3 ? { id, in_progress: true } : { id, completed_at: "now", completed_count: 2 },
+          data:
+            polls < 3
+              ? { id, in_progress: true }
+              : { id, completed_at: "now", completed_count: 2 },
         };
       }),
       listRequests: vi.fn(async () => ({ ok: true as const, data: [] })),

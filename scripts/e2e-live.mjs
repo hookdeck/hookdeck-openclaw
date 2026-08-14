@@ -24,6 +24,12 @@ const KEY = /^HOOKDECK_TEST_API_KEY=(.+)$/m.exec(
   readFileSync(`${REPO}/.env.local`, "utf8"),
 )[1].trim();
 
+// Overridable for CI, where the CLI is installed globally. The absolute
+// default is deliberate: on a developer machine an npm shim often shadows the
+// Homebrew build on PATH, and the version gate would then check one binary
+// while the tunnel launches another.
+const CLI_BIN = process.env.HOOKDECK_CLI_BIN ?? "/usr/local/bin/hookdeck";
+
 const results = [];
 const record = (name, pass, detail) => {
   results.push({ name, pass, detail });
@@ -80,7 +86,7 @@ const config = {
           apiKey: KEY,
           ingress: { basePath: "/hookdeck" },
           maxConcurrent: 4,
-          transport: { mode: "cli", port: PORT, binaryPath: "/usr/local/bin/hookdeck" },
+          transport: { mode: "cli", port: PORT, binaryPath: CLI_BIN },
           provisioning: { enabled: false },
           catchUp: { enabled: true, minGapSeconds: 1 },
           pause: { onShutdown: true, shutdownTimeoutMs: 15000 },

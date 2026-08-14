@@ -193,10 +193,13 @@ describe("bulk replay sends the body the API actually requires", () => {
       apiKey: "k",
       fetch: async (url, init) => {
         sent.push({ url, body: JSON.parse(String(init?.body ?? "{}")) });
-        return new Response(JSON.stringify({ id: "bch_1", estimated_count: 3 }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ id: "bch_1", estimated_count: 3 }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       },
     });
     return { client, sent };
@@ -270,6 +273,7 @@ describe("bulk replay sends the body the API actually requires", () => {
       target: { webhook_ids: ["web_1"] },
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toContain("query.target is required");
+    if (!result.ok)
+      expect(result.message).toContain("query.target is required");
   });
 });

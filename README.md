@@ -151,6 +151,8 @@ npm run test:package   # loads the packed tarball in a real Gateway
 npm run test:e2e:all   # 38 scenarios against a real project (needs HOOKDECK_TEST_API_KEY)
 ```
 
+Releasing, the live suites and what CI covers are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Learn more
 
 - [Using Hookdeck with OpenClaw](https://hookdeck.com/webhooks/platforms/using-hookdeck-with-openclaw-reliable-webhooks-for-your-ai-agent): full architecture walkthrough

@@ -1,0 +1,136 @@
+# Live tests against the Hookdeck API.
+#
+# The offline suite drives the plugin against fakes, so it can prove what the
+# plugin sends but never what Hookdeck does with it. That gap is where the
+# defects were: a bulk replay whose body Hookdeck rejects outright, a catch-up
+# filter matching neither disconnect regime, and a crash leaving no record an
+# outage happened. All three passed a green offline suite for weeks.
+#
+# Requires a HOOKDECK_TEST_API_KEY repository secret holding a project API key.
+# Without it the job is skipped rather than failed, so pull requests from forks
+# — which cannot read secrets — stay green.
+#
+# The suite creates and deletes real sources, destinations and connections,
+# every one prefixed `openclaw-`. Point the secret at a project used for
+# nothing else.
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never two at once against the same project: several assertions read
+# project-wide state, and a sibling run creating a source moves the number
+# between two reads.
+concurrency:
+  group: integration-hookdeck-project
+  cancel-in-progress: false
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+
+    # Fork pull requests get no secrets, so the job would fail for a reason the
+    # contributor cannot fix. Skipping keeps the signal honest.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - run: npm ci
+
+      - name: Skip when no API key is configured
+        id: guard
+        env:
+          KEY: ${{ secrets.HOOKDECK_TEST_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "No HOOKDECK_TEST_API_KEY secret; skipping the live suite."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The suites read the key from .env.local, the same file a developer
+      # uses, so there is one code path rather than a CI-only branch.
+      - name: Write .env.local
+        if: steps.guard.outputs.run == 'true'
+        env:
+          KEY: ${{ secrets.HOOKDECK_TEST_API_KEY }}
+        run: printf 'HOOKDECK_TEST_API_KEY=%s\n' "$KEY" > .env.local
+
+      - name: Live API suite
+        if: steps.guard.outputs.run == 'true'
+        run: npm run test:live
+
+      # Provider verification needs no tunnel: the source is provisioned by the
+      # plugin, and a Stripe signature is generated from a secret we choose.
+      - name: Provider verification, end to end
+        if: steps.guard.outputs.run == 'true'
+        run: npm run test:e2e:verification
+
+      - name: Remove the key
+        if: always()
+        run: rm -f .env.local
+
+  # The tunnel suites need the Hookdeck CLI and boot a real Gateway, so they
+  # are slower and heavier than the API ones. Run on demand rather than on
+  # every push — a broken tunnel is not something a pull request introduces.
+  tunnel:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - run: npm ci
+
+      - name: Install the Hookdeck CLI
+        run: |
+          npm i -g hookdeck-cli
+          hookdeck version
+
+      - name: Write .env.local
+        env:
+          KEY: ${{ secrets.HOOKDECK_TEST_API_KEY }}
+        run: printf 'HOOKDECK_TEST_API_KEY=%s\n' "$KEY" > .env.local
+
+      # `hookdeck listen` needs a CLI session, which is a different credential
+      # from the API key — the project key alone does not authenticate it.
+      #
+      # `hookdeck ci` is the only command that mints one, and the plugin itself
+      # refuses to run it: against a developer's machine it rewrites the shared
+      # CLI config and switches the active project for everything else there.
+      # A throwaway runner has no other Hookdeck use and is discarded after
+      # the job, so the objection does not apply here. It writes the CLI's
+      # default config, which is where `hookdeck listen` looks — scoping it
+      # elsewhere would authenticate a session the tunnel never finds.
+      - name: Authenticate the CLI
+        env:
+          KEY: ${{ secrets.HOOKDECK_TEST_API_KEY }}
+        run: hookdeck ci --api-key "$KEY"
+
+      - name: Dispatch modes, filters and transports
+        run: npm run test:e2e:dispatch
+        env:
+          HOOKDECK_CLI_BIN: hookdeck
+
+      - name: The full end-to-end suite
+        run: npm run test:e2e
+        env:
+          HOOKDECK_CLI_BIN: hookdeck
+
+      - name: Remove the credentials
+        if: always()
+        run: rm -f .env.local ~/.config/hookdeck/config.toml

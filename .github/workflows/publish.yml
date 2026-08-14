@@ -1,0 +1,148 @@
+# Publishes to npm when a GitHub Release is published.
+#
+# The release is the source of truth: creating it makes the tag, carries the
+# notes people read, and starts this workflow. Nothing publishes from a bare
+# tag push, and nothing publishes from a laptop.
+#
+# ─── WHY A RELEASE AND NOT A TAG ─────────────────────────────────────────────
+#
+# Driving it from a published Release rather than a tag push means the version,
+# the notes and the artifact are decided in one place, and a draft release can
+# be prepared and reviewed before anything reaches npm.
+#
+# ─── PROVENANCE IS NOT TRUSTED PUBLISHING ────────────────────────────────────
+#
+# Two separate things, easily conflated:
+#
+#   Provenance         the signed attestation linking the package to this repo,
+#                      workflow and commit. Needs `id-token: write`, and works
+#                      with either auth method below.
+#
+#   Trusted publishing publishing with a short-lived OIDC token instead of a
+#                      long-lived npm token.
+#
+# ─── SETUP ───────────────────────────────────────────────────────────────────
+#
+# Trusted publishers are configured on an *existing* package's settings page,
+# so a package that has never been published cannot use OIDC for its first
+# release. Claim the name with one version published by hand, then configure
+# the publisher; every version after that comes from here, with provenance.
+#
+# There should be no NPM_TOKEN secret on this repository. npm >= 11.5.1 finds
+# the trusted publisher itself and exchanges the Actions OIDC token during
+# publish, so there is nothing to inject — and a credential in .npmrc takes
+# precedence over OIDC, so a half-configured or empty secret silently becomes
+# the publishing identity, or fails.
+#
+# ─── CLAWHUB ─────────────────────────────────────────────────────────────────
+#
+# ClawHub is the plugin's primary distribution channel, and it is NOT published
+# here: the OpenClaw build in use ships no publishing command (`openclaw
+# plugins` has no publish path, and there is no `clawhub` subcommand), so there
+# is nothing to automate yet. Publishing there is manual — see CONTRIBUTING.md.
+# npm is the second channel, and `openclaw plugins install <npm spec>` works
+# from it today.
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Required to mint an OIDC token for the npm provenance attestation.
+      id-token: write
+      # Scoped down from the default for least-privilege publishing.
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The release tag, not the default branch: publish exactly what was
+          # released, even if main has moved on since.
+          ref: ${{ github.event.release.tag_name }}
+
+      # `registry-url` is deliberately not set. It makes setup-node write
+      # `_authToken=${NODE_AUTH_TOKEN}` into .npmrc, and with no token that is
+      # an empty credential — which npm prefers over OIDC, so trusted
+      # publishing silently fails to engage. The default registry is npmjs.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+          cache: npm
+
+      - run: npm ci
+
+      # The tag is the version. package.json is not bumped in a commit, so
+      # there is no release commit to land and no window where the two
+      # disagree. `--allow-same-version` keeps a first release working when
+      # package.json already carries the number.
+      - name: Set the version from the release tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Publishing $VERSION"
+          npm version --no-git-tag-version --allow-same-version "$VERSION"
+
+      # The same gates CI runs, repeated because this is the last point at
+      # which a bad package can be stopped. The packed-artifact check matters
+      # most here: it is the only one that sees what `files` actually ships.
+      - name: Verify before publishing
+        run: |
+          npx prettier --check "src/**/*.ts" "test/**/*.ts" index.ts
+          npm run typecheck
+          npm test
+          npm run test:package
+
+      # A pre-release tag (0.2.0-beta.1) publishes under `beta`, so
+      # `npm install @hookdeck/openclaw` keeps resolving to the last stable
+      # version.
+      - name: Choose the npm dist-tag
+        id: disttag
+        run: |
+          if [ "${{ github.event.release.prerelease }}" = "true" ]; then
+            echo "tag=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check npm supports trusted publishing
+        run: |
+          npx --yes semver -r '>=11.5.1' "$(npm -v)" >/dev/null \
+            || { echo "npm $(npm -v) is too old for OIDC publishing (needs >=11.5.1)"; exit 1; }
+
+      - name: Publish
+        run: npm publish --provenance --access public --tag "${{ steps.disttag.outputs.tag }}"
+
+      - name: Keep the published tarball
+        run: npm pack --pack-destination dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: dist/
+
+  attach:
+    # A separate job so the publishing one keeps `contents: read`. Writing to
+    # the release is the only thing here that needs more, and it needs no
+    # token for npm.
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tarball
+          path: dist/
+
+      # The human created the release, so it has notes but no files. Attach the
+      # exact tarball that went to npm, so the GitHub release is not a
+      # description of a build nobody can see.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

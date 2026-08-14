@@ -4,17 +4,60 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per branch or PR. A superseded run proves nothing about the commit
+# that replaced it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 'lts/*'
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
+
+      # An invalid workflow file does not fail loudly — GitHub refuses to
+      # validate it and simply never runs it, so a broken publish.yml looks
+      # exactly like a release that published nothing. Checked here because the
+      # publish workflow, by definition, cannot check itself.
+      - name: Lint the workflows
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color
+
+      - name: Formatting
+        run: npx prettier --check "src/**/*.ts" "test/**/*.ts" index.ts
+
+      - name: Types
+        run: npm run typecheck
+
       # Excludes test/live, which needs a Hookdeck project and an API key.
-      - run: npm test
+      - name: Tests
+        run: npm test
+
+  package:
+    # A plugin that installs without its manifest or an entry file registers
+    # nothing, and the failure is silent — the host simply never loads it.
+    # `npm pack` honours the `files` field, so a runtime file nobody listed is
+    # invisible to every other test here: they all read the source tree, where
+    # it is present. This boots a real Gateway from the packed tarball instead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - run: npm ci
+      - name: The packed plugin must load and verify a delivery
+        run: npm run test:package
