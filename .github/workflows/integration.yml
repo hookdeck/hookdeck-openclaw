@@ -47,17 +47,25 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Skip when no API key is configured
+      # A fork pull request cannot read secrets, so skipping is the only
+      # honest outcome there. On main it is a misconfiguration, and skipping
+      # would leave this workflow permanently green while proving nothing —
+      # which is worse than not having it.
+      - name: Require an API key on main, tolerate its absence on a fork
         id: guard
         env:
           KEY: ${{ secrets.HOOKDECK_TEST_API_KEY }}
         run: |
-          if [ -z "$KEY" ]; then
-            echo "No HOOKDECK_TEST_API_KEY secret; skipping the live suite."
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
+          if [ -n "$KEY" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "::error::No HOOKDECK_TEST_API_KEY secret. The live suite cannot run, so this workflow would be green without testing anything. Add the secret, or disable this workflow deliberately."
+            exit 1
+          fi
+          echo "::warning::No HOOKDECK_TEST_API_KEY secret; skipping the live suite."
+          echo "run=false" >> "$GITHUB_OUTPUT"
 
       # The suites read the key from .env.local, the same file a developer
       # uses, so there is one code path rather than a CI-only branch.
